@@ -2,8 +2,25 @@ import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
 import { requireAdmin } from "./users";
 
-// PUBLIC: success page polls this with a stripe session id to show confirmation.
-// Returns null until the webhook has processed the session and inserted the row.
+// PUBLIC: success page polls this with a stripe payment intent id to show
+// confirmation. Returns null until the webhook has processed the payment and
+// inserted the row. (We also support stripeSessionId for backward compat with
+// any older Checkout-based bookings.)
+export const getByPaymentIntent = query({
+  args: { paymentIntentId: v.string() },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db
+      .query("bookings")
+      .withIndex("by_payment_intent", (q) =>
+        q.eq("stripePaymentIntentId", args.paymentIntentId),
+      )
+      .unique();
+    if (!booking) return null;
+    const service = await ctx.db.get(booking.serviceId);
+    return { ...booking, serviceName: service?.name ?? "Service" };
+  },
+});
+
 export const getBySession = query({
   args: { stripeSessionId: v.string() },
   handler: async (ctx, args) => {
@@ -26,9 +43,12 @@ export const getBySession = query({
 // same document, so even if Stripe delivers the webhook twice in parallel,
 // only the first call sees isNew=true. Caller uses this to gate side effects
 // like the Cal.com booking — preventing duplicate calendar entries / emails.
+//
+// Keyed on stripePaymentIntentId — every PaymentIntent is unique to one
+// payment attempt, so this is the right idempotency key for the
+// `payment_intent.succeeded` webhook event.
 export const upsertFromWebhook = internalMutation({
   args: {
-    stripeSessionId: v.string(),
     stripePaymentIntentId: v.string(),
     serviceId: v.id("services"),
     slotStart: v.number(),
@@ -43,13 +63,12 @@ export const upsertFromWebhook = internalMutation({
   handler: async (ctx, args) => {
     const existing = await ctx.db
       .query("bookings")
-      .withIndex("by_stripe_session", (q) =>
-        q.eq("stripeSessionId", args.stripeSessionId),
+      .withIndex("by_payment_intent", (q) =>
+        q.eq("stripePaymentIntentId", args.stripePaymentIntentId),
       )
       .unique();
     if (existing) return { id: existing._id, isNew: false };
     const id = await ctx.db.insert("bookings", {
-      stripeSessionId: args.stripeSessionId,
       stripePaymentIntentId: args.stripePaymentIntentId,
       serviceId: args.serviceId,
       slotStart: args.slotStart,

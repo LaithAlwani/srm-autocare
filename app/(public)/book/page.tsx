@@ -5,15 +5,74 @@ import { useSearchParams } from "next/navigation";
 import { useAction, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, ArrowRight, Calendar, Check, Clock, Loader2 } from "lucide-react";
-import { loadStripe, type Stripe } from "@stripe/stripe-js";
-import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
+import { loadStripe, type Stripe, type StripeElementsOptions } from "@stripe/stripe-js";
+import { Elements } from "@stripe/react-stripe-js";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
+import { StripePaymentForm } from "@/components/stripe-payment-form";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 import { resolveIcon } from "@/lib/icons";
+
+// Midnight Precision palette mapped to Stripe Elements appearance API.
+// Stripe needs literal hex strings here — keep in sync with app/globals.css.
+const STRIPE_APPEARANCE: StripeElementsOptions["appearance"] = {
+  theme: "night",
+  labels: "above",
+  variables: {
+    colorPrimary: "#007aff",
+    colorBackground: "#201f1f",
+    colorText: "#e5e2e1",
+    colorTextSecondary: "#c1c6d7",
+    colorTextPlaceholder: "#8b90a0",
+    colorDanger: "#ffb4ab",
+    colorIcon: "#c1c6d7",
+    colorIconTab: "#c1c6d7",
+    colorIconTabSelected: "#007aff",
+    fontFamily: "Inter, system-ui, sans-serif",
+    fontSizeBase: "16px",
+    fontWeightNormal: "400",
+    spacingUnit: "4px",
+    borderRadius: "0px",
+    focusBoxShadow: "0 0 0 1px #007aff",
+    focusOutline: "none",
+  },
+  rules: {
+    ".Input": {
+      backgroundColor: "#201f1f",
+      border: "1px solid rgba(229, 229, 229, 0.1)",
+      boxShadow: "none",
+      padding: "12px 14px",
+    },
+    ".Input:focus": {
+      borderColor: "#007aff",
+      boxShadow: "0 0 0 1px #007aff",
+    },
+    ".Label": {
+      fontFamily: "JetBrains Mono, ui-monospace, monospace",
+      fontSize: "12px",
+      letterSpacing: "0.1em",
+      textTransform: "uppercase",
+      color: "#c1c6d7",
+      marginBottom: "8px",
+    },
+    ".Tab": {
+      backgroundColor: "#201f1f",
+      border: "1px solid rgba(229, 229, 229, 0.1)",
+      boxShadow: "none",
+    },
+    ".Tab:hover": {
+      backgroundColor: "#2a2a2a",
+    },
+    ".Tab--selected": {
+      backgroundColor: "#2a2a2a",
+      borderColor: "#007aff",
+      boxShadow: "0 0 0 1px #007aff",
+    },
+  },
+};
 
 type Step = 0 | 1 | 2 | 3;
 const STEP_LABELS: Record<Step, string> = {
@@ -41,7 +100,7 @@ export default function BookPage() {
   const searchParams = useSearchParams();
   const services = useQuery(api.services.list, {});
   const listSlots = useAction(api.calcom.listSlots);
-  const createCheckoutSession = useAction(api.stripe.createCheckoutSession);
+  const createPaymentIntent = useAction(api.stripe.createPaymentIntent);
 
   const [step, setStep] = useState<Step>(0);
   const [serviceId, setServiceId] = useState<Id<"services"> | null>(
@@ -99,8 +158,7 @@ export default function BookPage() {
       const slotStart = new Date(slotStartISO).getTime();
       const slotEnd = slotStart + selectedService.durationMinutes * 60 * 1000;
 
-      const origin = window.location.origin;
-      const { clientSecret: cs } = await createCheckoutSession({
+      const { clientSecret: cs } = await createPaymentIntent({
         serviceId,
         slotStart,
         slotEnd,
@@ -109,7 +167,6 @@ export default function BookPage() {
         customerPhone: details.customerPhone.trim(),
         vehicleInfo: details.vehicleInfo.trim(),
         notes: details.notes.trim() || undefined,
-        returnUrl: `${origin}/book/success`,
       });
       setClientSecret(cs);
       setStep(3);
@@ -446,13 +503,17 @@ export default function BookPage() {
                 <h2 className="text-headline-lg uppercase mb-8">Payment</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2">
-                    <div className="gloss-card p-2">
-                      <EmbeddedCheckoutProvider
+                    <div className="gloss-card p-8">
+                      <Elements
                         stripe={getStripe()}
-                        options={{ clientSecret }}
+                        options={{ clientSecret, appearance: STRIPE_APPEARANCE }}
                       >
-                        <EmbeddedCheckout />
-                      </EmbeddedCheckoutProvider>
+                        <StripePaymentForm
+                          returnUrl={`${window.location.origin}/book/success`}
+                          customerEmail={details.customerEmail.trim()}
+                          amountLabel={formatPriceFromCents(selectedService.depositCents)}
+                        />
+                      </Elements>
                     </div>
                   </div>
                   <aside className="gloss-card p-8 self-start">

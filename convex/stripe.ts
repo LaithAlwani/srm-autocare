@@ -11,14 +11,14 @@ function stripeClient() {
   return new Stripe(key, { apiVersion: "2026-04-22.dahlia" });
 }
 
-// PUBLIC: customer kicks off the Stripe Checkout flow from /book.
-// Returns a `clientSecret` for Stripe's Embedded Checkout, which is rendered
-// inside our /book page so the customer never leaves the site.
+// PUBLIC: creates a PaymentIntent for the deposit and returns its client secret.
+// The frontend renders Stripe Elements / PaymentElement using this secret —
+// the entire card form lives inside our /book page so we control every pixel.
 //
-// Booking details ride in the Stripe session metadata — nothing is written to
-// Convex until the webhook fires after a successful payment + Cal.com booking.
-// Stripe metadata limits: max 50 keys, 500 chars per value, 8KB total.
-export const createCheckoutSession = action({
+// Booking details ride on PaymentIntent.metadata, just like before. The
+// webhook (`payment_intent.succeeded`) reads them back and writes the booking
+// row only after Stripe confirms payment.
+export const createPaymentIntent = action({
   args: {
     serviceId: v.id("services"),
     slotStart: v.number(),
@@ -28,43 +28,33 @@ export const createCheckoutSession = action({
     customerPhone: v.string(),
     vehicleInfo: v.string(),
     notes: v.optional(v.string()),
-    returnUrl: v.string(),
   },
-  handler: async (ctx, args): Promise<{ clientSecret: string; sessionId: string }> => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ clientSecret: string; paymentIntentId: string }> => {
     const service = await ctx.runQuery(api.services.get, { id: args.serviceId });
     if (!service) throw new Error("Service not found");
     if (!service.active) throw new Error("Service is not bookable");
 
     const stripe = stripeClient();
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      ui_mode: "embedded",
-      payment_method_types: ["card"],
-      customer_email: args.customerEmail,
-      // After payment Stripe POSTs the form, then redirects (full page) to
-      // return_url with {CHECKOUT_SESSION_ID} interpolated.
-      return_url: `${args.returnUrl}?session_id={CHECKOUT_SESSION_ID}`,
-      line_items: [
+    const intent = await stripe.paymentIntents.create({
+      amount: service.depositCents,
+      currency: "cad",
+      receipt_email: args.customerEmail,
+      automatic_payment_methods: { enabled: true },
+      description: `${service.name} — booking deposit (${new Date(args.slotStart).toLocaleString(
+        "en-CA",
         {
-          price_data: {
-            currency: "cad",
-            product_data: {
-              name: `${service.name} — booking deposit`,
-              description: `Deposit for ${new Date(args.slotStart).toLocaleString("en-CA", {
-                timeZone: "America/New_York",
-                weekday: "short",
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-                timeZoneName: "short",
-              })}`,
-            },
-            unit_amount: service.depositCents,
-          },
-          quantity: 1,
+          timeZone: "America/New_York",
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          timeZoneName: "short",
         },
-      ],
+      )})`,
       metadata: {
         serviceId: String(args.serviceId),
         slotStart: String(args.slotStart),
@@ -78,7 +68,9 @@ export const createCheckoutSession = action({
       },
     });
 
-    if (!session.client_secret) throw new Error("Stripe did not return a client secret");
-    return { clientSecret: session.client_secret, sessionId: session.id };
+    if (!intent.client_secret) {
+      throw new Error("Stripe did not return a client secret");
+    }
+    return { clientSecret: intent.client_secret, paymentIntentId: intent.id };
   },
 });

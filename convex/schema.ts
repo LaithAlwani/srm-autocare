@@ -97,5 +97,6 @@ export default defineSchema({
     .index("by_email", ["customerEmail"])
     .index("by_status", ["status"])
     .index("by_slot_start", ["slotStart"])
-    .index("by_stripe_session", ["stripeSessionId"]),
+    .index("by_stripe_session", ["stripeSessionId"])
+    .index("by_payment_intent", ["stripePaymentIntentId"]),
 });

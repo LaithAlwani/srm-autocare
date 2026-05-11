@@ -11,18 +11,29 @@ import { formatPriceFromCents, formatDateTime } from "@/lib/format";
 
 export default function BookSuccessPage() {
   const searchParams = useSearchParams();
+  // Stripe Elements appends `payment_intent` to the return_url after a
+  // successful confirmation. Older Checkout-based bookings used `session_id`
+  // — fall back to that for backward compat with any older links.
+  const paymentIntentId = searchParams.get("payment_intent");
   const sessionId = searchParams.get("session_id");
-  const booking = useQuery(
-    api.bookings.getBySession,
-    sessionId ? { stripeSessionId: sessionId } : "skip",
+
+  const bookingByPI = useQuery(
+    api.bookings.getByPaymentIntent,
+    paymentIntentId ? { paymentIntentId } : "skip",
   );
+  const bookingBySession = useQuery(
+    api.bookings.getBySession,
+    !paymentIntentId && sessionId ? { stripeSessionId: sessionId } : "skip",
+  );
+  const booking = paymentIntentId ? bookingByPI : bookingBySession;
+  const hasIdentifier = Boolean(paymentIntentId || sessionId);
 
   return (
     <div>
       <section className="section-y">
         <Container className="max-w-2xl text-center">
-          {!sessionId ? (
-            <p className="text-foreground-muted">Missing checkout session — nothing to confirm.</p>
+          {!hasIdentifier ? (
+            <p className="text-foreground-muted">Missing payment reference — nothing to confirm.</p>
           ) : booking === undefined ? (
             <div className="flex flex-col items-center gap-4 text-foreground-muted">
               <Loader2 className="animate-spin" size={32} />

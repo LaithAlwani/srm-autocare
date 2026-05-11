@@ -10,11 +10,11 @@ const http = httpRouter();
 auth.addHttpRoutes(http);
 
 // Stripe webhook: only place that writes a confirmed booking. Reads booking
-// details from Stripe session metadata (set by stripe.createCheckoutSession),
+// details from PaymentIntent metadata (set by stripe.createPaymentIntent),
 // places the slot in Cal.com, then inserts the row in Convex.
 //
-// Configure with `stripe listen --forward-to <CONVEX_SITE_URL>/stripe/webhook`
-// in dev, or add the prod URL as a Stripe webhook endpoint.
+// In the Stripe dashboard webhook, subscribe to: `payment_intent.succeeded`
+// (we no longer use Checkout Sessions, so checkout.session.completed is unused).
 http.route({
   path: "/stripe/webhook",
   method: "POST",
@@ -37,12 +37,12 @@ http.route({
       return new Response("Bad signature", { status: 400 });
     }
 
-    if (event.type !== "checkout.session.completed") {
+    if (event.type !== "payment_intent.succeeded") {
       return new Response("ignored", { status: 200 });
     }
 
-    const session = event.data.object as import("stripe").Stripe.Checkout.Session;
-    const meta = session.metadata ?? {};
+    const intent = event.data.object as import("stripe").Stripe.PaymentIntent;
+    const meta = intent.metadata ?? {};
 
     const serviceId = meta.serviceId as Id<"services"> | undefined;
     const slotStart = Number(meta.slotStart);
@@ -53,21 +53,15 @@ http.route({
       return new Response("bad metadata", { status: 400 });
     }
 
-    const paymentIntentId =
-      typeof session.payment_intent === "string"
-        ? session.payment_intent
-        : (session.payment_intent?.id ?? "");
-
-    // 1) Insert the booking FIRST. This is atomic on stripeSessionId — Convex
+    // 1) Insert the booking FIRST. Atomic on stripePaymentIntentId — Convex
     //    serializes mutations on the same document, so two simultaneous
-    //    webhook deliveries will only get one `isNew: true` back. We use that
-    //    flag to gate the Cal.com call and prevent duplicate calendar
+    //    webhook deliveries will only get one `isNew: true` back. We use
+    //    that flag to gate the Cal.com call and prevent duplicate calendar
     //    bookings / confirmation emails.
     const { id: bookingId, isNew } = await ctx.runMutation(
       internal.bookings.upsertFromWebhook,
       {
-        stripeSessionId: session.id,
-        stripePaymentIntentId: paymentIntentId,
+        stripePaymentIntentId: intent.id,
         serviceId,
         slotStart,
         slotEnd,
