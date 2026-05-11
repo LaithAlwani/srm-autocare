@@ -56,7 +56,7 @@ export default function ContactPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
             {/* Contact details */}
             <div>
-              <h2 className="text-headline-lg uppercase mb-8">Studio details</h2>
+              <h2 className="text-headline-lg uppercase mb-8">Details</h2>
               <ul className="space-y-8">
                 <li className="flex gap-4">
                   <Phone className="text-primary mt-1 shrink-0" size={20} strokeWidth={1.5} />
@@ -85,7 +85,7 @@ export default function ContactPage() {
                 <li className="flex gap-4">
                   <MapPin className="text-primary mt-1 shrink-0" size={20} strokeWidth={1.5} />
                   <div>
-                    <p className="text-label-tech text-foreground-muted mb-1">Studio</p>
+                    <p className="text-label-tech text-foreground-muted mb-1">Garage</p>
                     <a
                       href={siteConfig.address.mapsUrl}
                       target="_blank"
@@ -180,6 +180,35 @@ export default function ContactPage() {
               </form>
             </div>
           </div>
+        </Container>
+      </section>
+
+      {/* MAP — embedded Google Maps view of the studio. Uses the unauthenticated
+          ?output=embed trick (no API key needed) and centers on the configured
+          address from siteConfig so it stays in sync with the rest of the site. */}
+      <section className="pb-20">
+        <Container>
+          <div className="gloss-card overflow-hidden">
+            <iframe
+              title={`Map: ${siteConfig.name}`}
+              src={`https://maps.google.com/maps?q=${encodeURIComponent(
+                `${siteConfig.address.street}, ${siteConfig.address.city}, ${siteConfig.address.state} ${siteConfig.address.zip}, ${siteConfig.address.country}`,
+              )}&output=embed`}
+              className="w-full h-105 block"
+              loading="lazy"
+              referrerPolicy="no-referrer-when-downgrade"
+            />
+          </div>
+          <p className="text-label-tech text-foreground-muted mt-4 text-center">
+            <a
+              href={siteConfig.address.mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground transition-colors"
+            >
+              Open in Google Maps ↗
+            </a>
+          </p>
         </Container>
       </section>
     </div>

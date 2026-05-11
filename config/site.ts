@@ -9,10 +9,10 @@ export const siteConfig = {
   tagline: "Precision Detailing. Showroom Finish.",
   description:
     "Premium automotive detailing — ceramic coatings, paint correction, PPF, and bespoke interior care for the discerning owner.",
-  url: "https://srm-autocare.com",
+  url: "https://srmautocare.com",
 
   contact: {
-    email: "info@srm-autocare.com",
+    email: "autocare@srmcollision.com",
     phone: "+1 (613) 741-0080",
     phoneHref: "tel:+16137410080",
   },
