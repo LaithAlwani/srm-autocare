@@ -1,6 +1,7 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
-import { requireAdmin } from "./users";
+import { query, action, internalMutation } from "./_generated/server";
+import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 // PUBLIC: list active services for marketing pages.
 export const list = query({
@@ -51,29 +52,60 @@ export const get = query({
   },
 });
 
+// ─────────────────────────────────────────────────────────────────
 // ADMIN
-export const create = mutation({
-  args: {
-    name: v.string(),
-    slug: v.string(),
-    description: v.string(),
-    durationMinutes: v.number(),
-    priceFromCents: v.number(),
-    depositCents: v.number(),
-    imageStorageId: v.optional(v.id("_storage")),
-    icon: v.optional(v.string()),
-    badge: v.optional(v.string()),
-    calcomEventTypeId: v.optional(v.number()),
-    order: v.number(),
-    active: v.boolean(),
-  },
-  handler: async (ctx, args) => {
-    await requireAdmin(ctx);
-    return await ctx.db.insert("services", args);
+//
+// `create`, `update`, and `remove` are public actions instead of mutations
+// because they sync the matching Cal.com event type (HTTP call). They do
+// auth + Cal.com side effects, then delegate the actual DB write to
+// internal mutations below. The admin no longer enters a calcomEventTypeId
+// by hand — it's captured from Cal.com's API response on creation and
+// stored on the row automatically.
+// ─────────────────────────────────────────────────────────────────
+
+const baseFields = {
+  name: v.string(),
+  slug: v.string(),
+  description: v.string(),
+  durationMinutes: v.number(),
+  priceFromCents: v.number(),
+  depositCents: v.number(),
+  imageStorageId: v.optional(v.id("_storage")),
+  icon: v.optional(v.string()),
+  badge: v.optional(v.string()),
+  order: v.number(),
+  active: v.boolean(),
+};
+
+export const create = action({
+  args: baseFields,
+  handler: async (ctx, args): Promise<Id<"services">> => {
+    const me = await ctx.runQuery(api.users.currentUser);
+    if (!me || (me.role !== "owner" && me.role !== "admin")) {
+      throw new Error("Not authorized");
+    }
+
+    // 1. Create the matching Cal.com event type — fail fast if Cal.com errors,
+    //    so we never end up with a service that has no bookable calendar.
+    const { eventTypeId } = await ctx.runAction(
+      internal.calcom.createEventTypeInternal,
+      {
+        title: args.name,
+        slug: args.slug,
+        lengthInMinutes: args.durationMinutes,
+        description: args.description,
+      },
+    );
+
+    // 2. Insert the service row with the captured event type id.
+    return await ctx.runMutation(internal.services.insertInternal, {
+      ...args,
+      calcomEventTypeId: eventTypeId,
+    });
   },
 });
 
-export const update = mutation({
+export const update = action({
   args: {
     id: v.id("services"),
     patch: v.object({
@@ -86,29 +118,125 @@ export const update = mutation({
       imageStorageId: v.optional(v.union(v.id("_storage"), v.null())),
       icon: v.optional(v.string()),
       badge: v.optional(v.string()),
-      calcomEventTypeId: v.optional(v.union(v.number(), v.null())),
+      order: v.optional(v.number()),
+      active: v.optional(v.boolean()),
+    }),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    const me = await ctx.runQuery(api.users.currentUser);
+    if (!me || (me.role !== "owner" && me.role !== "admin")) {
+      throw new Error("Not authorized");
+    }
+    const existing = await ctx.runQuery(api.services.get, { id: args.id });
+    if (!existing) throw new Error("Service not found");
+
+    // 1. Sync the change to Cal.com if the row is linked. We only care about
+    //    fields Cal.com knows: title (name), duration, description.
+    if (existing.calcomEventTypeId) {
+      const calPatch: {
+        title?: string;
+        lengthInMinutes?: number;
+        description?: string;
+      } = {};
+      if (args.patch.name !== undefined && args.patch.name !== existing.name) {
+        calPatch.title = args.patch.name;
+      }
+      if (
+        args.patch.durationMinutes !== undefined &&
+        args.patch.durationMinutes !== existing.durationMinutes
+      ) {
+        calPatch.lengthInMinutes = args.patch.durationMinutes;
+      }
+      if (
+        args.patch.description !== undefined &&
+        args.patch.description !== existing.description
+      ) {
+        calPatch.description = args.patch.description;
+      }
+      if (Object.keys(calPatch).length > 0) {
+        await ctx.runAction(internal.calcom.updateEventTypeInternal, {
+          eventTypeId: existing.calcomEventTypeId,
+          ...calPatch,
+        });
+      }
+    }
+
+    // 2. Patch the local row.
+    await ctx.runMutation(internal.services.patchInternal, {
+      id: args.id,
+      patch: args.patch,
+    });
+  },
+});
+
+export const remove = action({
+  args: { id: v.id("services") },
+  handler: async (ctx, args): Promise<void> => {
+    const me = await ctx.runQuery(api.users.currentUser);
+    if (!me || (me.role !== "owner" && me.role !== "admin")) {
+      throw new Error("Not authorized");
+    }
+    const existing = await ctx.runQuery(api.services.get, { id: args.id });
+    if (!existing) return;
+
+    // 1. Delete from Cal.com first so a half-successful op leaves the calendar
+    //    clean (better an orphan service row than an orphan calendar event).
+    if (existing.calcomEventTypeId) {
+      await ctx.runAction(internal.calcom.deleteEventTypeInternal, {
+        eventTypeId: existing.calcomEventTypeId,
+      });
+    }
+
+    // 2. Delete the row + any uploaded image.
+    await ctx.runMutation(internal.services.removeInternal, { id: args.id });
+  },
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Internal helpers — only callable from the actions above. Auth is checked
+// in the actions; these just touch the DB.
+// ─────────────────────────────────────────────────────────────────
+
+export const insertInternal = internalMutation({
+  args: {
+    ...baseFields,
+    calcomEventTypeId: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("services", args);
+  },
+});
+
+export const patchInternal = internalMutation({
+  args: {
+    id: v.id("services"),
+    patch: v.object({
+      name: v.optional(v.string()),
+      slug: v.optional(v.string()),
+      description: v.optional(v.string()),
+      durationMinutes: v.optional(v.number()),
+      priceFromCents: v.optional(v.number()),
+      depositCents: v.optional(v.number()),
+      imageStorageId: v.optional(v.union(v.id("_storage"), v.null())),
+      icon: v.optional(v.string()),
+      badge: v.optional(v.string()),
       order: v.optional(v.number()),
       active: v.optional(v.boolean()),
     }),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
-    const { imageStorageId, calcomEventTypeId, ...rest } = args.patch;
+    const { imageStorageId, ...rest } = args.patch;
     const patch: Record<string, unknown> = { ...rest };
     if (imageStorageId !== undefined) {
       patch.imageStorageId = imageStorageId === null ? undefined : imageStorageId;
-    }
-    if (calcomEventTypeId !== undefined) {
-      patch.calcomEventTypeId = calcomEventTypeId === null ? undefined : calcomEventTypeId;
     }
     await ctx.db.patch(args.id, patch);
   },
 });
 
-export const remove = mutation({
+export const removeInternal = internalMutation({
   args: { id: v.id("services") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
     const service = await ctx.db.get(args.id);
     if (service?.imageStorageId) {
       await ctx.storage.delete(service.imageStorageId);
@@ -116,3 +244,4 @@ export const remove = mutation({
     await ctx.db.delete(args.id);
   },
 });
+

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { tv, type VariantProps } from "tailwind-variants";
-import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 const button = tv({
@@ -38,7 +38,7 @@ export function Button({
   ...rest
 }: ButtonProps) {
   return (
-    <button className={clsx(button({ variant, size, block }), className)} {...rest}>
+    <button className={twMerge(button({ variant, size, block }), className)} {...rest}>
       {children}
     </button>
   );
@@ -52,7 +52,7 @@ type ButtonLinkProps = {
 
 export function ButtonLink({ href, variant, size, block, className, children }: ButtonLinkProps) {
   return (
-    <Link href={href} className={clsx(button({ variant, size, block }), className)}>
+    <Link href={href} className={twMerge(button({ variant, size, block }), className)}>
       {children}
     </Link>
   );

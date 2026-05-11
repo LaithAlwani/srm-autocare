@@ -2,17 +2,21 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   CalendarCheck,
   Image as ImageIcon,
   LayoutDashboard,
+  Loader2,
   LogOut,
+  Menu,
   MessageSquare,
   Settings,
   Sparkles,
-  Loader2,
+  X,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Container } from "@/components/ui/container";
@@ -34,6 +38,28 @@ export function AdminShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { signOut } = useAuthActions();
   const me = useQuery(api.users.currentUser);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Close the mobile drawer whenever the route changes — otherwise tapping a
+  // nav link would leave the menu open over the new page.
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  // Close on Escape and lock body scroll while the drawer is open.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMobileOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [mobileOpen]);
 
   // Loading user — show neutral splash so we don't flash unauthorized content.
   if (me === undefined) {
@@ -72,54 +98,125 @@ export function AdminShell({ children }: { children: ReactNode }) {
     );
   }
 
+  // Sidebar contents — rendered in two places: as a permanent sidebar on
+  // desktop, and inside the slide-in drawer on mobile.
+  const sidebarBody = (
+    <div className="flex flex-col h-full">
+      <div className="p-6 border-b border-border">
+        <Link href="/" className="text-headline-md font-extrabold uppercase tracking-tighter block">
+          {siteConfig.name}
+        </Link>
+        <span className="text-label-tech text-primary">Admin</span>
+      </div>
+      <nav className="p-4 space-y-1 flex-1 overflow-y-auto">
+        {NAV.map((item) => {
+          const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-3 px-4 py-3 text-label-tech transition-colors border-l-2 ${
+                active
+                  ? "bg-primary-container/10 text-primary border-primary"
+                  : "text-foreground-muted border-transparent hover:bg-white/5 hover:text-foreground"
+              }`}
+            >
+              <Icon size={16} />
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
+      <div className="p-4 border-t border-border">
+        <p className="text-label-tech text-foreground-muted mb-3 truncate">{me.email}</p>
+        <Button
+          variant="ghost"
+          size="sm"
+          block
+          onClick={async () => {
+            await signOut();
+            router.push("/admin/login");
+          }}
+        >
+          <LogOut size={14} /> Sign out
+        </Button>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen grid grid-cols-1 md:grid-cols-[260px_1fr]">
-      {/* Sidebar */}
-      <aside className="border-r border-border bg-surface-container-lowest">
-        <div className="p-6 border-b border-border">
-          <Link href="/" className="text-headline-md font-extrabold uppercase tracking-tighter block">
-            {siteConfig.name}
-          </Link>
-          <span className="text-label-tech text-primary">Admin</span>
-        </div>
-        <nav className="p-4 space-y-1">
-          {NAV.map((item) => {
-            const active = item.exact ? pathname === item.href : pathname.startsWith(item.href);
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`flex items-center gap-3 px-4 py-3 text-label-tech transition-colors border-l-2 ${
-                  active
-                    ? "bg-primary-container/10 text-primary border-primary"
-                    : "text-foreground-muted border-transparent hover:bg-white/5 hover:text-foreground"
-                }`}
-              >
-                <Icon size={16} />
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="p-4 border-t border-border mt-auto">
-          <p className="text-label-tech text-foreground-muted mb-3 truncate">{me.email}</p>
-          <Button
-            variant="ghost"
-            size="sm"
-            block
-            onClick={async () => {
-              await signOut();
-              router.push("/admin/login");
-            }}
-          >
-            <LogOut size={14} /> Sign out
-          </Button>
-        </div>
+    <div className="min-h-screen md:grid md:grid-cols-[260px_1fr]">
+      {/* Mobile top bar — only visible below md. Hosts the burger trigger. */}
+      <header className="md:hidden sticky top-0 z-30 flex items-center justify-between gap-3 px-4 py-3 bg-surface-container-lowest border-b border-border">
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+          aria-expanded={mobileOpen}
+          aria-controls="admin-mobile-drawer"
+          className="w-10 h-10 flex items-center justify-center border border-border text-foreground hover:border-primary hover:text-primary transition-colors"
+        >
+          <Menu size={18} />
+        </button>
+        <Link
+          href="/admin"
+          className="text-headline-md font-extrabold uppercase tracking-tighter"
+        >
+          {siteConfig.shortName} <span className="text-primary">Admin</span>
+        </Link>
+        {/* Spacer to keep the title visually centered between the burger and a
+            same-width invisible element on the right. */}
+        <span className="w-10 h-10" aria-hidden="true" />
+      </header>
+
+      {/* Permanent sidebar (desktop only). */}
+      <aside className="hidden md:block border-r border-border bg-surface-container-lowest">
+        {sidebarBody}
       </aside>
 
+      {/* Mobile drawer + scrim. */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <>
+            <motion.div
+              key="scrim"
+              className="fixed inset-0 z-40 bg-surface/70 backdrop-blur md:hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => setMobileOpen(false)}
+              aria-hidden="true"
+            />
+            <motion.aside
+              id="admin-mobile-drawer"
+              key="drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Admin navigation"
+              className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-surface-container-lowest border-r border-border md:hidden flex flex-col"
+              initial={{ x: "-100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "-100%" }}
+              transition={{ type: "tween", duration: 0.25, ease: "easeOut" }}
+            >
+              <button
+                type="button"
+                onClick={() => setMobileOpen(false)}
+                aria-label="Close menu"
+                className="absolute top-4 right-4 w-9 h-9 flex items-center justify-center text-foreground-muted hover:text-foreground"
+              >
+                <X size={18} />
+              </button>
+              {sidebarBody}
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
       {/* Content */}
-      <main className="p-8 md:p-12 overflow-y-auto">{children}</main>
+      <main className="p-6 md:p-12 overflow-y-auto">{children}</main>
     </div>
   );
 }

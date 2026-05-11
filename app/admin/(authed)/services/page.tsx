@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
-import { Plus, Trash2, Pencil, X, Check, Loader2 } from "lucide-react";
+import { useAction, useQuery } from "convex/react";
+import { Plus, Trash2, Pencil, X, Check, Loader2, ExternalLink } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
+import { ConfirmModal } from "@/components/admin/confirm-modal";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 import { ICON_OPTIONS, resolveIcon } from "@/lib/icons";
 
@@ -21,8 +22,6 @@ type FormState = {
   depositDollars: number;
   icon: string;
   badge: string;
-  // 0 = no per-service event type configured (falls back to env var).
-  calcomEventTypeId: number;
   order: number;
   active: boolean;
 };
@@ -36,7 +35,6 @@ const EMPTY_FORM: FormState = {
   depositDollars: 0,
   icon: ICON_OPTIONS[0],
   badge: "",
-  calcomEventTypeId: 0,
   order: 999,
   active: true,
 };
@@ -46,14 +44,19 @@ const centsToDollars = (c: number) => Math.round(c) / 100;
 
 export default function AdminServicesPage() {
   const services = useQuery(api.services.list, { includeInactive: true });
-  const createService = useMutation(api.services.create);
-  const updateService = useMutation(api.services.update);
-  const removeService = useMutation(api.services.remove);
+  const createService = useAction(api.services.create);
+  const updateService = useAction(api.services.update);
+  const removeService = useAction(api.services.remove);
 
   const [editingId, setEditingId] = useState<Id<"services"> | "new" | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: Id<"services">;
+    name: string;
+    calcomEventTypeId?: number;
+  } | null>(null);
 
   function startEdit(s: NonNullable<typeof services>[number]) {
     setEditingId(s._id);
@@ -66,7 +69,6 @@ export default function AdminServicesPage() {
       depositDollars: centsToDollars(s.depositCents),
       icon: s.icon ?? ICON_OPTIONS[0],
       badge: s.badge ?? "",
-      calcomEventTypeId: s.calcomEventTypeId ?? 0,
       order: s.order,
       active: s.active,
     });
@@ -83,7 +85,6 @@ export default function AdminServicesPage() {
     try {
       const priceFromCents = dollarsToCents(form.priceFromDollars);
       const depositCents = dollarsToCents(form.depositDollars);
-      const calcomEventTypeId = form.calcomEventTypeId > 0 ? form.calcomEventTypeId : undefined;
       if (editingId === "new") {
         await createService({
           name: form.name,
@@ -94,7 +95,6 @@ export default function AdminServicesPage() {
           depositCents,
           icon: form.icon || undefined,
           badge: form.badge || undefined,
-          calcomEventTypeId,
           order: form.order,
           active: form.active,
         });
@@ -110,7 +110,6 @@ export default function AdminServicesPage() {
             depositCents,
             icon: form.icon || undefined,
             badge: form.badge || undefined,
-            calcomEventTypeId: calcomEventTypeId ?? null,
             order: form.order,
             active: form.active,
           },
@@ -124,10 +123,6 @@ export default function AdminServicesPage() {
     }
   }
 
-  async function handleDelete(id: Id<"services">) {
-    if (!confirm("Delete this service?")) return;
-    await removeService({ id });
-  }
 
   return (
     <div>
@@ -144,7 +139,7 @@ export default function AdminServicesPage() {
       </div>
 
       {editingId !== null && (
-        <div className="gloss-card p-8 mb-8">
+        <div className="gloss-card p-4 md:p-8 mb-8">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-headline-md uppercase">
               {editingId === "new" ? "New service" : "Edit service"}
@@ -212,23 +207,14 @@ export default function AdminServicesPage() {
               value={form.badge}
               onChange={(v) => setForm((f) => ({ ...f, badge: v }))}
             />
-            <div className="md:col-span-2">
-              <label className="text-label-tech text-foreground-muted mb-2 block">
-                Cal.com event type ID
-              </label>
-              <input
-                type="number"
-                min="0"
-                value={form.calcomEventTypeId || ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, calcomEventTypeId: Number(e.target.value) || 0 }))
-                }
-                placeholder="e.g. 5650170 — leave blank to use the global fallback"
-                className="w-full bg-surface-container px-4 py-3 text-body-md text-foreground border-0 border-b border-chrome focus:outline-none focus:border-primary"
-              />
-              <p className="text-label-tech text-foreground-muted mt-2">
-                Find in Cal.com → Event Types → open the event → URL ends in <code className="text-primary">/event-types/12345</code>.
-                The duration set in Cal.com determines how long the slot is blocked off.
+            <div className="md:col-span-2 p-4 border border-border bg-surface-container-low">
+              <p className="text-label-tech text-foreground-muted">
+                A matching Cal.com event type is created automatically on save with this
+                duration and the booking fields the customer flow needs (vehicle, notes).
+                Edits to <span className="text-foreground">name</span>,{" "}
+                <span className="text-foreground">duration</span>, or{" "}
+                <span className="text-foreground">description</span> sync over to Cal.com.
+                Availability and other Cal.com settings are managed in the Cal.com dashboard.
               </p>
             </div>
             <div className="md:col-span-2 flex items-center gap-3">
@@ -268,70 +254,225 @@ export default function AdminServicesPage() {
       {services === undefined ? (
         <p className="text-foreground-muted">Loading services...</p>
       ) : (
-        <div className="gloss-card overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="text-label-tech text-foreground-muted border-b border-border">
-                <th className="text-left p-4">Order</th>
-                <th className="text-left p-4">Service</th>
-                <th className="text-left p-4">Duration</th>
-                <th className="text-right p-4">Price from</th>
-                <th className="text-right p-4">Deposit</th>
-                <th className="text-center p-4">Active</th>
-                <th className="text-right p-4">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {services.map((s) => {
-                const Icon = resolveIcon(s.icon);
-                return (
-                  <tr key={s._id} className="border-b border-border last:border-0 text-body-md">
-                    <td className="p-4 text-foreground-muted">{s.order}</td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <Icon size={18} className="text-primary" strokeWidth={1.5} />
-                        <div>
-                          <div className="text-foreground">{s.name}</div>
-                          <div className="text-label-tech text-foreground-muted">{s.slug}</div>
+        <>
+          {/* Desktop: condensed table. Order + active chip + slug live in the
+              Service cell, price + deposit share a Pricing cell. overflow-x-auto
+              is a safety net for narrow viewports between md and lg. */}
+          <div className="hidden md:block gloss-card overflow-x-auto">
+            <table className="w-full min-w-180">
+              <thead>
+                <tr className="text-label-tech text-foreground-muted border-b border-border">
+                  <th className="text-left p-4">Service</th>
+                  <th className="text-left p-4 w-24">Duration</th>
+                  <th className="text-right p-4 w-32">Pricing</th>
+                  <th className="text-center p-4 w-28">Cal.com</th>
+                  <th className="text-right p-4 w-28">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {services.map((s) => {
+                  const Icon = resolveIcon(s.icon);
+                  return (
+                    <tr
+                      key={s._id}
+                      className="border-b border-border last:border-0 text-body-md align-top"
+                    >
+                      <td className="p-4">
+                        <div className="flex items-start gap-3">
+                          <Icon
+                            size={20}
+                            className="text-primary shrink-0 mt-0.5"
+                            strokeWidth={1.5}
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-foreground">{s.name}</span>
+                              <span
+                                className={`text-label-tech px-2 py-0.5 border ${
+                                  s.active
+                                    ? "text-success border-success/30 bg-success/10"
+                                    : "text-foreground-muted border-border"
+                                }`}
+                              >
+                                {s.active ? "ON" : "OFF"}
+                              </span>
+                            </div>
+                            <div className="text-label-tech text-foreground-muted mt-1 truncate">
+                              {s.slug} · #{s.order}
+                            </div>
+                          </div>
                         </div>
+                      </td>
+                      <td className="p-4 text-foreground-muted whitespace-nowrap">
+                        {formatDuration(s.durationMinutes)}
+                      </td>
+                      <td className="p-4 text-right whitespace-nowrap">
+                        <div className="text-foreground font-mono-tech">
+                          {formatPriceFromCents(s.priceFromCents)}
+                        </div>
+                        <div className="text-label-tech text-foreground-muted mt-1">
+                          {formatPriceFromCents(s.depositCents)} dep.
+                        </div>
+                      </td>
+                      <td className="p-4 text-center text-label-tech">
+                        {s.calcomEventTypeId ? (
+                          <a
+                            href={`https://app.cal.com/event-types/${s.calcomEventTypeId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline inline-flex items-center gap-1"
+                            title={`Cal.com event type ${s.calcomEventTypeId}`}
+                          >
+                            #{s.calcomEventTypeId} <ExternalLink size={10} />
+                          </a>
+                        ) : (
+                          <span className="text-foreground-muted">—</span>
+                        )}
+                      </td>
+                      <td className="p-4 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => startEdit(s)}
+                          className="p-2 text-foreground-muted hover:text-foreground transition-colors"
+                          aria-label="Edit"
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          onClick={() =>
+                            setDeleteTarget({
+                              id: s._id,
+                              name: s.name,
+                              calcomEventTypeId: s.calcomEventTypeId,
+                            })
+                          }
+                          className="p-2 text-foreground-muted hover:text-error transition-colors ml-1"
+                          aria-label="Delete"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile: card list */}
+          <ul className="md:hidden space-y-3">
+            {services.map((s) => {
+              const Icon = resolveIcon(s.icon);
+              return (
+                <li key={s._id} className="gloss-card p-4 flex flex-col gap-3">
+                  <div className="flex items-start gap-3">
+                    <Icon size={22} className="text-primary shrink-0 mt-0.5" strokeWidth={1.5} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-headline-md text-foreground wrap-break-word">
+                          {s.name}
+                        </div>
+                        <span
+                          className={`text-label-tech px-2 py-1 border shrink-0 ${
+                            s.active
+                              ? "text-success border-success/30 bg-success/10"
+                              : "text-foreground-muted border-border"
+                          }`}
+                        >
+                          {s.active ? "ON" : "OFF"}
+                        </span>
                       </div>
-                    </td>
-                    <td className="p-4 text-foreground-muted">{formatDuration(s.durationMinutes)}</td>
-                    <td className="p-4 text-right text-foreground">{formatPriceFromCents(s.priceFromCents)}</td>
-                    <td className="p-4 text-right text-foreground-muted">
+                      <div className="text-label-tech text-foreground-muted mt-1 break-all">
+                        {s.slug} · #{s.order}
+                      </div>
+                    </div>
+                  </div>
+
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-label-tech">
+                    <dt className="text-foreground-muted">Duration</dt>
+                    <dd className="text-right text-foreground">
+                      {formatDuration(s.durationMinutes)}
+                    </dd>
+                    <dt className="text-foreground-muted">Price from</dt>
+                    <dd className="text-right text-foreground font-mono-tech">
+                      {formatPriceFromCents(s.priceFromCents)}
+                    </dd>
+                    <dt className="text-foreground-muted">Deposit</dt>
+                    <dd className="text-right text-foreground-muted font-mono-tech">
                       {formatPriceFromCents(s.depositCents)}
-                    </td>
-                    <td className="p-4 text-center">
-                      <span
-                        className={`text-label-tech px-2 py-1 ${
-                          s.active ? "text-success" : "text-foreground-muted"
-                        }`}
-                      >
-                        {s.active ? "ON" : "OFF"}
-                      </span>
-                    </td>
-                    <td className="p-4 text-right">
-                      <button
-                        onClick={() => startEdit(s)}
-                        className="p-2 text-foreground-muted hover:text-foreground transition-colors"
-                        aria-label="Edit"
-                      >
-                        <Pencil size={16} />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(s._id)}
-                        className="p-2 text-foreground-muted hover:text-error transition-colors ml-1"
-                        aria-label="Delete"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </dd>
+                    <dt className="text-foreground-muted">Cal.com</dt>
+                    <dd className="text-right">
+                      {s.calcomEventTypeId ? (
+                        <a
+                          href={`https://app.cal.com/event-types/${s.calcomEventTypeId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline inline-flex items-center gap-1"
+                        >
+                          #{s.calcomEventTypeId} <ExternalLink size={10} />
+                        </a>
+                      ) : (
+                        <span className="text-foreground-muted">—</span>
+                      )}
+                    </dd>
+                  </dl>
+
+                  <div className="flex gap-2 pt-2 border-t border-border">
+                    <button
+                      onClick={() => startEdit(s)}
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-label-tech border border-border text-foreground-muted hover:text-foreground hover:border-chrome transition-colors"
+                    >
+                      <Pencil size={12} /> Edit
+                    </button>
+                    <button
+                      onClick={() =>
+                        setDeleteTarget({
+                          id: s._id,
+                          name: s.name,
+                          calcomEventTypeId: s.calcomEventTypeId,
+                        })
+                      }
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-label-tech border border-error/40 text-error hover:bg-error/10 transition-colors"
+                    >
+                      <Trash2 size={12} /> Delete
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+
+      {deleteTarget && (
+        <ConfirmModal
+          title="Delete service?"
+          variant="danger"
+          confirmLabel="Delete service"
+          cancelLabel="Keep service"
+          message={
+            <div className="space-y-3">
+              <p>
+                <span className="text-foreground">{deleteTarget.name}</span> will be removed from
+                the public site and the booking flow.
+              </p>
+              {deleteTarget.calcomEventTypeId && (
+                <p>
+                  Its Cal.com event type{" "}
+                  <span className="text-foreground font-mono-tech">
+                    #{deleteTarget.calcomEventTypeId}
+                  </span>{" "}
+                  will also be deleted. Existing bookings tied to this service stay in the
+                  database.
+                </p>
+              )}
+            </div>
+          }
+          onConfirm={async () => {
+            await removeService({ id: deleteTarget.id });
+          }}
+          onClose={() => setDeleteTarget(null)}
+        />
       )}
     </div>
   );

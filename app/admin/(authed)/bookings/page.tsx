@@ -172,21 +172,21 @@ export default function AdminBookingsPage() {
                 {/* INFO — label/value pairs */}
                 <dl className="p-6 md:p-8 grid grid-cols-1 md:grid-cols-[160px_1fr] gap-x-6 gap-y-4">
                   <Row label="Customer">
-                    <div className="text-foreground">{b.customerName}</div>
-                    <div className="flex flex-col sm:flex-row sm:gap-4 mt-1 text-label-tech text-foreground-muted">
+                    <div className="text-foreground wrap-break-word">{b.customerName}</div>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-label-tech text-foreground-muted">
                       <a
                         href={`mailto:${b.customerEmail}`}
-                        className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+                        className="flex items-center gap-1.5 min-w-0 max-w-full hover:text-foreground transition-colors"
                       >
-                        <Mail size={11} />
-                        {b.customerEmail}
+                        <Mail size={11} className="shrink-0" />
+                        <span className="break-all">{b.customerEmail}</span>
                       </a>
                       <a
                         href={`tel:${b.customerPhone}`}
                         className="flex items-center gap-1.5 hover:text-foreground transition-colors"
                       >
-                        <Phone size={11} />
-                        {b.customerPhone}
+                        <Phone size={11} className="shrink-0" />
+                        <span className="whitespace-nowrap">{b.customerPhone}</span>
                       </a>
                     </div>
                   </Row>

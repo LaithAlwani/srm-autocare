@@ -13,17 +13,17 @@ export const siteConfig = {
 
   contact: {
     email: "info@srm-autocare.com",
-    phone: "+1 (555) 123-4567",
-    phoneHref: "tel:+15551234567",
+    phone: "+1 (613) 741-0080",
+    phoneHref: "tel:+16137410080",
   },
 
   address: {
-    street: "123 Detail Drive",
-    city: "Auto City",
-    state: "ST",
-    zip: "12345",
-    country: "USA",
-    mapsUrl: "https://maps.google.com/?q=123+Detail+Drive+Auto+City+ST+12345",
+    street: "1645 Comstock Rd",
+    city: "Gloucester",
+    state: "ON",
+    zip: "K1B 4X2",
+    country: "Canada",
+    mapsUrl: "https://www.google.com/maps/place/SRM+Collision+Centre/data=!4m2!3m1!1s0x0:0xaed2aed477d2637f?sa=X&ved=1t:2428&ictx=111",
   },
 
   // Default hours — admin can override via Convex siteContent["hours"] when
@@ -34,7 +34,7 @@ export const siteConfig = {
     { day: "Wed", open: "09:00", close: "18:00" },
     { day: "Thu", open: "09:00", close: "18:00" },
     { day: "Fri", open: "09:00", close: "18:00" },
-    { day: "Sat", open: "10:00", close: "17:00" },
+    { day: "Sat", open: null, close: null },
     { day: "Sun", open: null, close: null },
   ],
 

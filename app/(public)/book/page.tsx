@@ -1,10 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAction, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, ArrowRight, Calendar, Check, Clock, Loader2 } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Calendar,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Loader2,
+} from "lucide-react";
 import { loadStripe, type Stripe, type StripeElementsOptions } from "@stripe/stripe-js";
 import { Elements } from "@stripe/react-stripe-js";
 import { api } from "@/convex/_generated/api";
@@ -96,21 +105,52 @@ function getStripe() {
   return stripePromise;
 }
 
+// Today as `YYYY-MM-DD` in the browser's local zone. Used as the lower bound
+// on the date picker — we never let the customer pick a day in the past.
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function shiftDateISO(iso: string, days: number): string {
+  // Parse as local midnight so day arithmetic doesn't accidentally cross a
+  // timezone boundary and land on the wrong calendar day.
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+function formatLongDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-CA", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 export default function BookPage() {
   const searchParams = useSearchParams();
   const services = useQuery(api.services.list, {});
   const listSlots = useAction(api.calcom.listSlots);
+  const findNextAvailableDate = useAction(api.calcom.findNextAvailableDate);
   const createPaymentIntent = useAction(api.stripe.createPaymentIntent);
 
   const [step, setStep] = useState<Step>(0);
   const [serviceId, setServiceId] = useState<Id<"services"> | null>(
     (searchParams.get("service") as Id<"services"> | null) ?? null,
   );
-  const [date, setDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    return d.toISOString().slice(0, 10);
-  });
+  const minDate = todayISO();
+  const [date, setDate] = useState<string>(minDate);
+  // Tracks whether we've auto-selected the nearest open date for this service
+  // already — once the user manually changes it we leave them alone.
+  const [autoSelectedFor, setAutoSelectedFor] = useState<Id<"services"> | null>(null);
+  // Anchor we scroll to whenever the step changes — keeps mobile users from
+  // landing on the footer when a step's content is shorter than what they
+  // were viewing before.
+  const stepperRef = useRef<HTMLDivElement>(null);
   const [slots, setSlots] = useState<string[]>([]);
   const [slotLoading, setSlotLoading] = useState(false);
   const [slotError, setSlotError] = useState<string | null>(null);
@@ -138,6 +178,34 @@ export default function BookPage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [services]);
+
+  // The first time the customer lands on the slot step for a given service,
+  // jump them to the nearest day that actually has open slots — saves them
+  // clicking forward through empty days.
+  useEffect(() => {
+    if (step !== 1 || !serviceId || autoSelectedFor === serviceId) return;
+    setAutoSelectedFor(serviceId);
+    findNextAvailableDate({ serviceId })
+      .then((next) => {
+        if (next && next >= minDate) setDate(next);
+      })
+      .catch(() => {
+        // If the lookup fails we just leave the date on today — the slot
+        // fetch below will still run and surface its own error.
+      });
+  }, [step, serviceId, autoSelectedFor, findNextAvailableDate, minDate]);
+
+  // Scroll the stepper into view whenever the step changes. Skip the very
+  // first render so we don't jolt the page on initial mount. `start` block
+  // alignment keeps the stepper visible at the top of the viewport.
+  const firstStepRender = useRef(true);
+  useEffect(() => {
+    if (firstStepRender.current) {
+      firstStepRender.current = false;
+      return;
+    }
+    stepperRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [step]);
 
   // Re-fetch slots when date, service, or step changes to step 1.
   useEffect(() => {
@@ -194,33 +262,59 @@ export default function BookPage() {
 
       <section className="section-y">
         <Container>
-          {/* Stepper */}
-          <ol className="flex gap-2 mb-12 text-label-tech">
-            {(Object.entries(STEP_LABELS) as [string, string][]).map(([k, label]) => {
-              const n = Number(k) as Step;
-              const active = step === n;
-              const done = step > n;
-              return (
-                <li key={k} className="flex-1 flex items-center gap-3">
-                  <span
-                    className={`w-8 h-8 flex items-center justify-center border ${
-                      active
-                        ? "border-primary bg-primary text-on-primary glow-blue"
-                        : done
-                          ? "border-primary text-primary"
-                          : "border-border text-foreground-muted"
-                    }`}
-                  >
-                    {done ? <Check size={14} /> : `0${n + 1}`}
-                  </span>
-                  <span className={active ? "text-foreground" : "text-foreground-muted"}>
-                    {label}
-                  </span>
-                  <div className="flex-1 h-px bg-border" />
-                </li>
-              );
-            })}
-          </ol>
+          {/* Stepper — full version on desktop, compact line + progress bar on mobile. */}
+          {(() => {
+            const total = Object.keys(STEP_LABELS).length;
+            const currentLabel = STEP_LABELS[step];
+            const progress = ((step + 1) / total) * 100;
+            return (
+              <div ref={stepperRef} className="scroll-mt-20">
+                {/* Mobile: condensed indicator */}
+                <div className="md:hidden mb-10">
+                  <div className="flex items-baseline justify-between mb-2 text-label-tech">
+                    <span className="text-primary">
+                      Step {String(step + 1).padStart(2, "0")} of {String(total).padStart(2, "0")}
+                    </span>
+                    <span className="text-foreground">{currentLabel}</span>
+                  </div>
+                  <div className="h-px bg-border relative">
+                    <div
+                      className="absolute inset-y-0 left-0 bg-primary glow-blue-soft transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Desktop: full stepper */}
+                <ol className="hidden md:flex gap-2 mb-12 text-label-tech">
+                  {(Object.entries(STEP_LABELS) as [string, string][]).map(([k, label]) => {
+                    const n = Number(k) as Step;
+                    const active = step === n;
+                    const done = step > n;
+                    return (
+                      <li key={k} className="flex-1 flex items-center gap-3">
+                        <span
+                          className={`w-8 h-8 flex items-center justify-center border ${
+                            active
+                              ? "border-primary bg-primary text-on-primary glow-blue"
+                              : done
+                                ? "border-primary text-primary"
+                                : "border-border text-foreground-muted"
+                          }`}
+                        >
+                          {done ? <Check size={14} /> : `0${n + 1}`}
+                        </span>
+                        <span className={active ? "text-foreground" : "text-foreground-muted"}>
+                          {label}
+                        </span>
+                        <div className="flex-1 h-px bg-border" />
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            );
+          })()}
 
           <AnimatePresence mode="wait">
             {step === 0 && (
@@ -297,19 +391,16 @@ export default function BookPage() {
                 exit={{ opacity: 0, y: -8 }}
               >
                 <h2 className="text-headline-lg uppercase mb-8">Pick a time</h2>
-                <div className="gloss-card p-6 mb-8 flex items-center gap-4">
-                  <Calendar className="text-primary" size={20} />
-                  <input
-                    type="date"
-                    value={date}
-                    min={new Date().toISOString().slice(0, 10)}
-                    onChange={(e) => {
+                <div className="gloss-card p-4 md:p-6 mb-8 flex flex-col md:flex-row md:items-center gap-4">
+                  <DatePicker
+                    date={date}
+                    minDate={minDate}
+                    onChange={(d) => {
                       setSlotStartISO(null);
-                      setDate(e.target.value);
+                      setDate(d);
                     }}
-                    className="bg-transparent text-foreground text-body-md focus:outline-none"
                   />
-                  <div className="ml-auto text-label-tech text-foreground-muted">
+                  <div className="md:ml-auto text-label-tech text-foreground-muted">
                     {selectedService.name} • {formatDuration(selectedService.durationMinutes)}
                   </div>
                 </div>
@@ -563,6 +654,88 @@ export default function BookPage() {
           </AnimatePresence>
         </Container>
       </section>
+    </div>
+  );
+}
+
+// Bigger, more tappable date picker — arrow buttons either side of a single
+// big "calendar icon + date" button that opens the browser's native date
+// picker. Going back is disabled once we hit today so customers can't ever
+// pick a past day.
+function DatePicker({
+  date,
+  minDate,
+  onChange,
+}: {
+  date: string;
+  minDate: string;
+  onChange: (iso: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const canGoBack = date > minDate;
+
+  function shift(days: number) {
+    const next = shiftDateISO(date, days);
+    if (next < minDate) return;
+    onChange(next);
+  }
+
+  function openPicker() {
+    const el = inputRef.current;
+    if (!el) return;
+    // Modern browsers expose showPicker(); fall back to focusing the input.
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+        return;
+      } catch {
+        /* Some browsers throw if not triggered by direct user input — fall through. */
+      }
+    }
+    el.focus();
+    el.click();
+  }
+
+  return (
+    <div className="flex items-stretch gap-2 w-full md:w-auto">
+      <button
+        type="button"
+        onClick={() => shift(-1)}
+        disabled={!canGoBack}
+        aria-label="Previous day"
+        className="w-12 flex items-center justify-center border border-border text-foreground-muted hover:text-foreground hover:border-chrome transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+      >
+        <ChevronLeft size={18} />
+      </button>
+
+      <button
+        type="button"
+        onClick={openPicker}
+        className="flex-1 md:flex-none flex items-center justify-center gap-3 px-5 py-3 bg-surface-container border border-primary text-foreground hover:bg-surface-container-high transition-colors glow-blue-soft"
+      >
+        <Calendar size={18} className="text-primary shrink-0" />
+        <span className="text-body-md whitespace-nowrap">{formatLongDate(date)}</span>
+      </button>
+
+      <button
+        type="button"
+        onClick={() => shift(1)}
+        aria-label="Next day"
+        className="w-12 flex items-center justify-center border border-border text-foreground-muted hover:text-foreground hover:border-chrome transition-colors"
+      >
+        <ChevronRight size={18} />
+      </button>
+
+      {/* Native input — visually hidden but still focusable / pickable. */}
+      <input
+        ref={inputRef}
+        type="date"
+        value={date}
+        min={minDate}
+        onChange={(e) => e.target.value && onChange(e.target.value)}
+        className="sr-only"
+        aria-label="Pick a date"
+      />
     </div>
   );
 }

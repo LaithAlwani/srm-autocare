@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { Camera, Mail, MapPin, Phone, Share2 } from "lucide-react";
 import { siteConfig } from "@/config/site";
 
@@ -116,8 +117,29 @@ export function Footer() {
       </div>
 
       <div className="border-t border-border">
-        <div className="container-stitch py-6 text-label-tech text-foreground-muted">
-          © {year} {siteConfig.legal.copyrightHolder}. {siteConfig.legal.copyrightLine}
+        <div className="container-stitch py-6 flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6 text-label-tech text-foreground-muted">
+          <span>
+            © {year} {siteConfig.legal.copyrightHolder}. {siteConfig.legal.copyrightLine}
+          </span>
+          <a
+            href="https://ladigital.vercel.app/"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Powered by LA Digital"
+            className="sm:ml-auto inline-flex items-center gap-2 hover:text-foreground transition-colors group"
+          >
+            <Image
+              src="/la-digital-logo.webp"
+              alt=""
+              width={24}
+              height={24}
+              // brightness-0 flattens the original artwork to pure black, then
+              // invert flips it to pure white so the logo reads cleanly on the
+              // dark footer regardless of the source asset's colors.
+              className="h-5 w-5 brightness-0 invert opacity-70 group-hover:opacity-100 transition-opacity"
+            />
+            <span>Powered by LA Digital</span>
+          </a>
         </div>
       </div>
     </footer>

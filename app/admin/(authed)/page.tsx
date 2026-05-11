@@ -33,7 +33,7 @@ export default function AdminDashboard() {
       <Eyebrow className="mb-3">Overview</Eyebrow>
       <h1 className="text-headline-lg uppercase mb-10">Dashboard</h1>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-12">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-12">
         <Stat label="Active services" value={services?.filter((s) => s.active).length ?? "—"} icon={Sparkles} />
         <Stat label="Gallery items" value={gallery?.length ?? "—"} icon={ImageIcon} />
         <Stat label="Today" value={todayBookings} icon={CalendarDays} accent />
@@ -41,7 +41,7 @@ export default function AdminDashboard() {
       </div>
 
       <div className="gloss-card">
-        <div className="flex items-center justify-between p-6 border-b border-border">
+        <div className="flex items-center justify-between p-4 md:p-6 border-b border-border">
           <h2 className="text-headline-md uppercase">Recent bookings</h2>
           <Link
             href="/admin/bookings"
@@ -55,39 +55,73 @@ export default function AdminDashboard() {
         ) : bookings.length === 0 ? (
           <div className="p-6 text-foreground-muted">No bookings yet.</div>
         ) : (
-          <table className="w-full">
-            <thead>
-              <tr className="text-label-tech text-foreground-muted border-b border-border">
-                <th className="text-left p-4">Customer</th>
-                <th className="text-left p-4">Service</th>
-                <th className="text-left p-4">When</th>
-                <th className="text-left p-4">Booked</th>
-                <th className="text-left p-4">Status</th>
-                <th className="text-right p-4">Deposit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bookings.map((b) => (
-                <tr key={b._id} className="border-b border-border last:border-0 text-body-md">
-                  <td className="p-4">
-                    <div className="text-foreground">{b.customerName}</div>
-                    <div className="text-label-tech text-foreground-muted">{b.customerEmail}</div>
-                  </td>
-                  <td className="p-4 text-foreground-muted">{b.serviceName}</td>
-                  <td className="p-4 text-foreground-muted">{formatDateTime(b.slotStart)}</td>
-                  <td className="p-4 text-foreground-muted">
-                    <RelativeTime ts={b.createdAt} />
-                  </td>
-                  <td className="p-4">
-                    <StatusChip status={b.status} />
-                  </td>
-                  <td className="p-4 text-right text-foreground">
-                    {formatPriceFromCents(b.depositAmountCents)}
-                  </td>
+          <>
+            {/* Desktop: condensed table — Customer / When+Service / Status / Deposit.
+                Booked-time + service moved into the When cell so the dashboard
+                preview stays scannable in narrow content widths beside the sidebar. */}
+            <table className="hidden md:table w-full table-fixed">
+              <thead>
+                <tr className="text-label-tech text-foreground-muted border-b border-border">
+                  <th className="text-left p-4 w-[28%]">Customer</th>
+                  <th className="text-left p-4">When</th>
+                  <th className="text-left p-4 w-32">Status</th>
+                  <th className="text-right p-4 w-24">Deposit</th>
                 </tr>
+              </thead>
+              <tbody>
+                {bookings.map((b) => (
+                  <tr key={b._id} className="border-b border-border last:border-0 text-body-md align-top">
+                    <td className="p-4">
+                      <div className="text-foreground truncate">{b.customerName}</div>
+                      <div className="text-label-tech text-foreground-muted truncate">
+                        {b.customerEmail}
+                      </div>
+                    </td>
+                    <td className="p-4">
+                      <div className="text-foreground-muted">{formatDateTime(b.slotStart)}</div>
+                      <div className="text-label-tech text-foreground-muted mt-1 truncate">
+                        {b.serviceName} · booked <RelativeTime ts={b.createdAt} />
+                      </div>
+                    </td>
+                    <td className="p-4">
+                      <StatusChip status={b.status} />
+                    </td>
+                    <td className="p-4 text-right text-foreground font-mono-tech whitespace-nowrap">
+                      {formatPriceFromCents(b.depositAmountCents)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Mobile: compact cards */}
+            <ul className="md:hidden divide-y divide-border">
+              {bookings.map((b) => (
+                <li key={b._id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-foreground wrap-break-word">{b.customerName}</div>
+                      <div className="text-label-tech text-foreground-muted break-all">
+                        {b.customerEmail}
+                      </div>
+                    </div>
+                    <StatusChip status={b.status} />
+                  </div>
+                  <div className="text-body-md text-foreground-muted">{b.serviceName}</div>
+                  <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-label-tech text-foreground-muted">
+                    <span>{formatDateTime(b.slotStart)}</span>
+                    <span>·</span>
+                    <span>
+                      Booked <RelativeTime ts={b.createdAt} />
+                    </span>
+                    <span className="ml-auto text-foreground">
+                      {formatPriceFromCents(b.depositAmountCents)}
+                    </span>
+                  </div>
+                </li>
               ))}
-            </tbody>
-          </table>
+            </ul>
+          </>
         )}
       </div>
     </div>
