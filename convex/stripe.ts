@@ -12,12 +12,12 @@ function stripeClient() {
 }
 
 // PUBLIC: customer kicks off the Stripe Checkout flow from /book.
+// Returns a `clientSecret` for Stripe's Embedded Checkout, which is rendered
+// inside our /book page so the customer never leaves the site.
+//
 // Booking details ride in the Stripe session metadata — nothing is written to
 // Convex until the webhook fires after a successful payment + Cal.com booking.
-// This keeps the DB free of abandoned-checkout noise.
-//
-// Stripe metadata limits: max 50 keys, 500 chars per value, 8KB total. Our
-// payload fits easily; long `notes` is truncated to stay within limits.
+// Stripe metadata limits: max 50 keys, 500 chars per value, 8KB total.
 export const createCheckoutSession = action({
   args: {
     serviceId: v.id("services"),
@@ -28,10 +28,9 @@ export const createCheckoutSession = action({
     customerPhone: v.string(),
     vehicleInfo: v.string(),
     notes: v.optional(v.string()),
-    successUrl: v.string(),
-    cancelUrl: v.string(),
+    returnUrl: v.string(),
   },
-  handler: async (ctx, args): Promise<{ url: string }> => {
+  handler: async (ctx, args): Promise<{ clientSecret: string; sessionId: string }> => {
     const service = await ctx.runQuery(api.services.get, { id: args.serviceId });
     if (!service) throw new Error("Service not found");
     if (!service.active) throw new Error("Service is not bookable");
@@ -39,17 +38,27 @@ export const createCheckoutSession = action({
     const stripe = stripeClient();
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
+      ui_mode: "embedded",
       payment_method_types: ["card"],
       customer_email: args.customerEmail,
-      success_url: `${args.successUrl}?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: args.cancelUrl,
+      // After payment Stripe POSTs the form, then redirects (full page) to
+      // return_url with {CHECKOUT_SESSION_ID} interpolated.
+      return_url: `${args.returnUrl}?session_id={CHECKOUT_SESSION_ID}`,
       line_items: [
         {
           price_data: {
             currency: "cad",
             product_data: {
               name: `${service.name} — booking deposit`,
-              description: `Deposit for ${new Date(args.slotStart).toLocaleString()}`,
+              description: `Deposit for ${new Date(args.slotStart).toLocaleString("en-CA", {
+                timeZone: "America/New_York",
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+                timeZoneName: "short",
+              })}`,
             },
             unit_amount: service.depositCents,
           },
@@ -69,7 +78,7 @@ export const createCheckoutSession = action({
       },
     });
 
-    if (!session.url) throw new Error("Stripe did not return a checkout URL");
-    return { url: session.url };
+    if (!session.client_secret) throw new Error("Stripe did not return a client secret");
+    return { clientSecret: session.client_secret, sessionId: session.id };
   },
 });

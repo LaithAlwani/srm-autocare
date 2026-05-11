@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { useAction, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft, ArrowRight, Calendar, Check, Clock, Loader2 } from "lucide-react";
+import { loadStripe, type Stripe } from "@stripe/stripe-js";
+import { EmbeddedCheckoutProvider, EmbeddedCheckout } from "@stripe/react-stripe-js";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Container } from "@/components/ui/container";
@@ -13,12 +15,27 @@ import { Button } from "@/components/ui/button";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 import { resolveIcon } from "@/lib/icons";
 
-type Step = 0 | 1 | 2;
+type Step = 0 | 1 | 2 | 3;
 const STEP_LABELS: Record<Step, string> = {
   0: "Service",
   1: "Slot",
   2: "Details",
+  3: "Payment",
 };
+
+// Loaded once at module scope per Stripe.js best practice — calling loadStripe
+// inside the component would re-create the script tag on every render.
+let stripePromise: Promise<Stripe | null> | null = null;
+function getStripe() {
+  if (!stripePromise) {
+    const key = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+    if (!key) {
+      throw new Error("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY is not set");
+    }
+    stripePromise = loadStripe(key);
+  }
+  return stripePromise;
+}
 
 export default function BookPage() {
   const searchParams = useSearchParams();
@@ -48,6 +65,7 @@ export default function BookPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
 
   const selectedService = useMemo(
     () => (serviceId ? services?.find((s) => s._id === serviceId) ?? null : null),
@@ -82,7 +100,7 @@ export default function BookPage() {
       const slotEnd = slotStart + selectedService.durationMinutes * 60 * 1000;
 
       const origin = window.location.origin;
-      const { url } = await createCheckoutSession({
+      const { clientSecret: cs } = await createCheckoutSession({
         serviceId,
         slotStart,
         slotEnd,
@@ -91,12 +109,13 @@ export default function BookPage() {
         customerPhone: details.customerPhone.trim(),
         vehicleInfo: details.vehicleInfo.trim(),
         notes: details.notes.trim() || undefined,
-        successUrl: `${origin}/book/success`,
-        cancelUrl: `${origin}/book?cancelled=1`,
+        returnUrl: `${origin}/book/success`,
       });
-      window.location.href = url;
+      setClientSecret(cs);
+      setStep(3);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not create booking.");
+    } finally {
       setSubmitting(false);
     }
   }
@@ -393,24 +412,88 @@ export default function BookPage() {
                     >
                       {submitting ? (
                         <>
-                          <Loader2 className="animate-spin" size={14} /> Redirecting...
+                          <Loader2 className="animate-spin" size={14} /> Loading...
                         </>
                       ) : (
                         <>
-                          Pay deposit & confirm
+                          Continue to payment
                           <ArrowRight size={14} />
                         </>
                       )}
                     </Button>
                     <p className="text-label-tech text-foreground-muted mt-4 text-center">
                       <Clock size={10} className="inline mr-1" />
-                      Slot held for 10 minutes during checkout
+                      Card details collected on the next step
                     </p>
                   </aside>
                 </div>
 
                 <div className="mt-12 flex justify-start">
                   <Button variant="ghost" size="lg" onClick={() => setStep(1)} disabled={submitting}>
+                    <ArrowLeft size={14} /> Back
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 3 && selectedService && slotStartISO && clientSecret && (
+              <motion.div
+                key="step-3"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+              >
+                <h2 className="text-headline-lg uppercase mb-8">Payment</h2>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  <div className="lg:col-span-2">
+                    <div className="gloss-card p-2">
+                      <EmbeddedCheckoutProvider
+                        stripe={getStripe()}
+                        options={{ clientSecret }}
+                      >
+                        <EmbeddedCheckout />
+                      </EmbeddedCheckoutProvider>
+                    </div>
+                  </div>
+                  <aside className="gloss-card p-8 self-start">
+                    <h3 className="text-headline-md uppercase mb-6">Summary</h3>
+                    <dl className="space-y-4 text-body-md mb-8">
+                      <SummaryRow label="Service" value={selectedService.name} />
+                      <SummaryRow
+                        label="When"
+                        value={new Date(slotStartISO).toLocaleString("en-CA", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      />
+                      <SummaryRow
+                        label="Duration"
+                        value={formatDuration(selectedService.durationMinutes)}
+                      />
+                    </dl>
+                    <div className="border-t border-border pt-4">
+                      <div className="flex justify-between items-baseline">
+                        <span className="text-label-tech text-primary">Deposit due now</span>
+                        <span className="text-headline-md text-primary">
+                          {formatPriceFromCents(selectedService.depositCents)}
+                        </span>
+                      </div>
+                    </div>
+                  </aside>
+                </div>
+
+                <div className="mt-12 flex justify-start">
+                  <Button
+                    variant="ghost"
+                    size="lg"
+                    onClick={() => {
+                      setClientSecret(null);
+                      setStep(2);
+                    }}
+                  >
                     <ArrowLeft size={14} /> Back
                   </Button>
                 </div>
