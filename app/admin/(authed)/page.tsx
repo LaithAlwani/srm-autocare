@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import { ArrowRight, CalendarCheck, Image as ImageIcon, Sparkles } from "lucide-react";
+import { ArrowRight, CalendarCheck, CalendarDays, Image as ImageIcon, Sparkles } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { formatDateTime, formatPriceFromCents } from "@/lib/format";
@@ -11,9 +11,19 @@ import { RelativeTime } from "@/components/relative-time";
 export default function AdminDashboard() {
   const services = useQuery(api.services.list, { includeInactive: true });
   const gallery = useQuery(api.gallery.list, {});
-  const bookings = useQuery(api.bookings.listForAdmin, { limit: 5 });
+  const bookings = useQuery(api.bookings.listForAdmin, { limit: 50 });
 
-  const pendingBookings = (bookings ?? []).filter((b) => b.status === "pending").length;
+  const now = Date.now();
+  const startOfTomorrow = new Date(now);
+  startOfTomorrow.setHours(0, 0, 0, 0);
+  startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
+
+  const todayBookings = (bookings ?? []).filter(
+    (b) =>
+      b.status === "confirmed" &&
+      b.slotStart >= now &&
+      b.slotStart < startOfTomorrow.getTime(),
+  ).length;
   const upcoming = (bookings ?? []).filter(
     (b) => b.status === "confirmed" && b.slotStart > Date.now(),
   ).length;
@@ -26,8 +36,8 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 mb-12">
         <Stat label="Active services" value={services?.filter((s) => s.active).length ?? "—"} icon={Sparkles} />
         <Stat label="Gallery items" value={gallery?.length ?? "—"} icon={ImageIcon} />
-        <Stat label="Pending bookings" value={pendingBookings} icon={CalendarCheck} accent />
-        <Stat label="Upcoming confirmed" value={upcoming} icon={CalendarCheck} />
+        <Stat label="Today" value={todayBookings} icon={CalendarDays} accent />
+        <Stat label="Upcoming" value={upcoming} icon={CalendarCheck} />
       </div>
 
       <div className="gloss-card">
@@ -108,11 +118,11 @@ function Stat({
 
 export function StatusChip({ status }: { status: string }) {
   const tone =
-    status === "confirmed"
+    status === "confirmed" || status === "paid"
       ? "bg-success/15 text-success border-success/30"
-      : status === "cancelled"
+      : status === "cancelled" || status === "failed"
         ? "bg-error/15 text-error border-error/30"
-        : status === "completed"
+        : status === "completed" || status === "refunded"
           ? "bg-foreground-muted/10 text-foreground-muted border-border"
           : "bg-primary/15 text-primary border-primary/30";
   return (

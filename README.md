@@ -37,6 +37,24 @@ npm run dev
    npx convex run seed:promoteOwner '{"email":"you@example.com"}'
    ```
 
+## Cal.com webhook (sync reschedules / cancellations)
+
+When a customer reschedules or cancels via the link in their Cal.com confirmation
+email, the change needs to flow back into Convex. Configure once:
+
+1. https://app.cal.com → **Settings → Developer → Webhooks → New**
+2. **Subscriber URL**: `https://<convex-site-url>/calcom/webhook` (find your Convex site URL in the dashboard)
+3. **Event Triggers**: check **`BOOKING_RESCHEDULED`** and **`BOOKING_CANCELLED`**
+4. **Secret**: generate / paste any random string (e.g. `openssl rand -hex 32`)
+5. Push that same secret to Convex:
+   ```bash
+   npx convex env set CALCOM_WEBHOOK_SECRET <the-secret>
+   ```
+
+After saving, every reschedule updates the booking row's `slotStart` / `slotEnd`
+and swaps the Cal.com UID. Every cancellation flips the row's `status` to
+`cancelled`. Both fire an owner notification email via Resend.
+
 ## Stripe webhook (dev)
 
 The `/stripe/webhook` route runs on Convex (not Next.js). Forward Stripe events:

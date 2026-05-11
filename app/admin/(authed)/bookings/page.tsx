@@ -1,16 +1,72 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
+import { Ban, CalendarClock, History, Mail, Phone, Undo2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { formatDateTime, formatPriceFromCents } from "@/lib/format";
 import { RelativeTime } from "@/components/relative-time";
-import { StatusChip } from "../page";
+import { RescheduleModal } from "@/components/admin/reschedule-modal";
+import { ConfirmModal } from "@/components/admin/confirm-modal";
+import { RefundModal } from "@/components/admin/refund-modal";
 
-const FILTERS = ["all", "pending", "confirmed", "cancelled", "completed"] as const;
+const FILTERS = ["all", "confirmed", "cancelled", "completed"] as const;
 type Filter = (typeof FILTERS)[number];
+
+type RescheduleTarget = {
+  bookingId: Id<"bookings">;
+  serviceId: Id<"services">;
+  currentSlotStart: number;
+  customerName: string;
+  serviceName: string;
+};
+
+type CancelTarget = {
+  bookingId: Id<"bookings">;
+  customerName: string;
+  serviceName: string;
+  slotStart: number;
+};
+
+type RefundTarget = {
+  bookingId: Id<"bookings">;
+  customerName: string;
+  depositAmountCents: number;
+  alreadyRefundedCents: number;
+};
+
+// Color a thin left edge by status so the row state is scannable in a long list.
+function statusAccent(status: string): string {
+  switch (status) {
+    case "cancelled":
+      return "border-l-2 border-l-error";
+    case "completed":
+      return "border-l-2 border-l-foreground-muted";
+    default:
+      return "border-l-2 border-l-primary";
+  }
+}
+
+function paymentColor(payment: string): string {
+  switch (payment) {
+    case "paid":
+      return "text-success border-success/40 bg-success/10";
+    case "refunded":
+      return "text-foreground-muted border-border bg-surface-container-high";
+    case "partially_refunded":
+      return "text-primary-muted border-primary-muted/40 bg-primary-muted/10";
+    case "failed":
+      return "text-error border-error/40 bg-error/10";
+    default:
+      return "text-primary-muted border-primary-muted/40 bg-primary-muted/10";
+  }
+}
+
+function paymentLabel(payment: string): string {
+  return payment === "partially_refunded" ? "PARTIAL REFUND" : payment.toUpperCase();
+}
 
 export default function AdminBookingsPage() {
   const [filter, setFilter] = useState<Filter>("all");
@@ -19,9 +75,25 @@ export default function AdminBookingsPage() {
     filter === "all" ? { limit: 100 } : { status: filter, limit: 100 },
   );
   const updateStatus = useMutation(api.bookings.updateStatus);
+  const adminCancel = useAction(api.bookings.adminCancel);
+  const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
+  const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null);
 
-  async function changeStatus(id: Id<"bookings">, next: Exclude<Filter, "all">) {
-    await updateStatus({ id, status: next });
+  function changeStatus(
+    booking: { _id: Id<"bookings">; customerName: string; serviceName: string; slotStart: number },
+    next: Exclude<Filter, "all">,
+  ) {
+    if (next === "cancelled") {
+      setCancelTarget({
+        bookingId: booking._id,
+        customerName: booking.customerName,
+        serviceName: booking.serviceName,
+        slotStart: booking.slotStart,
+      });
+      return;
+    }
+    void updateStatus({ id: booking._id, status: next });
   }
 
   return (
@@ -52,65 +124,231 @@ export default function AdminBookingsPage() {
           No bookings match this filter.
         </div>
       ) : (
-        <div className="gloss-card overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="text-label-tech text-foreground-muted border-b border-border">
-                <th className="text-left p-4">Customer</th>
-                <th className="text-left p-4">Service</th>
-                <th className="text-left p-4">When</th>
-                <th className="text-left p-4">Booked</th>
-                <th className="text-left p-4">Vehicle</th>
-                <th className="text-left p-4">Payment</th>
-                <th className="text-right p-4">Deposit</th>
-                <th className="text-left p-4">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bookings.map((b) => (
-                <tr key={b._id} className="border-b border-border last:border-0 text-body-md align-top">
-                  <td className="p-4">
-                    <div className="text-foreground">{b.customerName}</div>
-                    <div className="text-label-tech text-foreground-muted">{b.customerEmail}</div>
-                    <div className="text-label-tech text-foreground-muted">{b.customerPhone}</div>
-                  </td>
-                  <td className="p-4 text-foreground-muted">{b.serviceName}</td>
-                  <td className="p-4 text-foreground-muted">{formatDateTime(b.slotStart)}</td>
-                  <td className="p-4 text-foreground-muted">
-                    <RelativeTime ts={b.createdAt} />
-                  </td>
-                  <td className="p-4 text-foreground-muted max-w-[200px]">
-                    {b.vehicleInfo}
-                    {b.notes && (
-                      <p className="text-label-tech mt-2 italic">"{b.notes}"</p>
-                    )}
-                  </td>
-                  <td className="p-4 text-foreground-muted">
-                    <StatusChip status={b.paymentStatus} />
-                  </td>
-                  <td className="p-4 text-right text-foreground">
-                    {formatPriceFromCents(b.depositAmountCents)}
-                  </td>
-                  <td className="p-4">
-                    <select
-                      value={b.status}
-                      onChange={(e) =>
-                        changeStatus(b._id, e.target.value as Exclude<Filter, "all">)
-                      }
-                      className="bg-surface-container text-body-md text-foreground border border-border px-2 py-1 focus:outline-none focus:border-primary"
+        <div className="space-y-3">
+          {bookings.map((b) => {
+            const isCancelled = b.status === "cancelled";
+            return (
+              <article
+                key={b._id}
+                className={`gloss-card ${statusAccent(b.status)} ${isCancelled ? "opacity-70" : ""}`}
+              >
+                {/* HERO — when + service + payment chip */}
+                <div className="p-6 md:p-8 flex flex-col md:flex-row md:items-start md:justify-between gap-4 border-b border-border">
+                  <div className="min-w-0">
+                    <div
+                      className={`text-label-tech text-primary mb-3 ${
+                        isCancelled ? "line-through text-foreground-muted" : ""
+                      }`}
                     >
-                      <option value="pending">PENDING</option>
-                      <option value="confirmed">CONFIRMED</option>
-                      <option value="cancelled">CANCELLED</option>
-                      <option value="completed">COMPLETED</option>
-                    </select>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      {formatDateTime(b.slotStart)}
+                    </div>
+                    <h3 className="text-headline-md text-foreground uppercase tracking-tight">
+                      {b.serviceName}
+                    </h3>
+                  </div>
+                  <div className="flex flex-wrap gap-2 shrink-0">
+                    <span
+                      className={`text-label-tech px-2 py-1 border ${paymentColor(b.paymentStatus)}`}
+                    >
+                      {paymentLabel(b.paymentStatus)}
+                    </span>
+                    {isCancelled ? (
+                      <span className="inline-flex items-center gap-1 text-label-tech px-2 py-1 border border-error/40 text-error bg-error/10">
+                        <Ban size={10} /> CANCELLED
+                      </span>
+                    ) : (
+                      b.rescheduledAt && (
+                        <span
+                          className="inline-flex items-center gap-1 text-label-tech px-2 py-1 border border-primary/40 text-primary bg-primary/10"
+                          title={`Rescheduled ${new Date(b.rescheduledAt).toLocaleString()}`}
+                        >
+                          <History size={10} /> RESCHEDULED
+                        </span>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {/* INFO — label/value pairs */}
+                <dl className="p-6 md:p-8 grid grid-cols-1 md:grid-cols-[160px_1fr] gap-x-6 gap-y-4">
+                  <Row label="Customer">
+                    <div className="text-foreground">{b.customerName}</div>
+                    <div className="flex flex-col sm:flex-row sm:gap-4 mt-1 text-label-tech text-foreground-muted">
+                      <a
+                        href={`mailto:${b.customerEmail}`}
+                        className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+                      >
+                        <Mail size={11} />
+                        {b.customerEmail}
+                      </a>
+                      <a
+                        href={`tel:${b.customerPhone}`}
+                        className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+                      >
+                        <Phone size={11} />
+                        {b.customerPhone}
+                      </a>
+                    </div>
+                  </Row>
+
+                  <Row label="Vehicle">
+                    <div className="text-foreground">{b.vehicleInfo}</div>
+                    {b.notes && (
+                      <p className="text-label-tech text-foreground-muted italic mt-1">
+                        “{b.notes}”
+                      </p>
+                    )}
+                  </Row>
+
+                  <Row label="Deposit">
+                    <div className="flex items-baseline gap-3 flex-wrap">
+                      <span className="text-foreground font-mono-tech">
+                        {formatPriceFromCents(b.depositAmountCents)}
+                      </span>
+                      {b.refundedAmountCents !== undefined && b.refundedAmountCents > 0 && (
+                        <span className="text-label-tech text-foreground-muted">
+                          – {formatPriceFromCents(b.refundedAmountCents)} refunded
+                        </span>
+                      )}
+                    </div>
+                  </Row>
+
+                  <Row label="Booked">
+                    <span className="text-foreground-muted text-label-tech">
+                      <RelativeTime ts={b.createdAt} />
+                    </span>
+                  </Row>
+
+                  {!isCancelled && b.rescheduledAt && b.originalSlotStart && (
+                    <Row label="Originally">
+                      <span className="text-label-tech text-foreground-muted line-through">
+                        {formatDateTime(b.originalSlotStart)}
+                      </span>
+                    </Row>
+                  )}
+                </dl>
+
+                {/* ACTIONS */}
+                <div className="px-6 md:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2 border-t border-border bg-surface-container-lowest">
+                  <select
+                    value={b.status}
+                    onChange={(e) =>
+                      changeStatus(b, e.target.value as Exclude<Filter, "all">)
+                    }
+                    className="bg-surface-container text-label-tech text-foreground border border-border px-3 py-2 focus:outline-none focus:border-primary"
+                    aria-label="Change status"
+                  >
+                    <option value="confirmed">CONFIRMED</option>
+                    <option value="cancelled">CANCELLED</option>
+                    <option value="completed">COMPLETED</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRescheduleTarget({
+                        bookingId: b._id,
+                        serviceId: b.serviceId,
+                        currentSlotStart: b.slotStart,
+                        customerName: b.customerName,
+                        serviceName: b.serviceName,
+                      })
+                    }
+                    disabled={!b.calComBookingId || isCancelled}
+                    className="inline-flex items-center justify-center gap-1.5 text-label-tech px-3 py-2 border border-border text-foreground-muted hover:text-primary hover:border-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    title={
+                      !b.calComBookingId
+                        ? "No Cal.com booking attached — can't reschedule"
+                        : isCancelled
+                          ? "Booking is cancelled"
+                          : "Reschedule via Cal.com"
+                    }
+                  >
+                    <CalendarClock size={12} /> Reschedule
+                  </button>
+                  {isCancelled &&
+                    b.paymentStatus !== "refunded" &&
+                    b.paymentStatus !== "failed" &&
+                    b.stripePaymentIntentId && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setRefundTarget({
+                            bookingId: b._id,
+                            customerName: b.customerName,
+                            depositAmountCents: b.depositAmountCents,
+                            alreadyRefundedCents: b.refundedAmountCents ?? 0,
+                          })
+                        }
+                        className="inline-flex items-center justify-center gap-1.5 text-label-tech px-3 py-2 border border-error/40 text-error hover:bg-error/10 transition-colors"
+                      >
+                        <Undo2 size={12} /> Refund
+                      </button>
+                    )}
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
+
+      {rescheduleTarget && (
+        <RescheduleModal
+          bookingId={rescheduleTarget.bookingId}
+          serviceId={rescheduleTarget.serviceId}
+          currentSlotStart={rescheduleTarget.currentSlotStart}
+          customerName={rescheduleTarget.customerName}
+          serviceName={rescheduleTarget.serviceName}
+          onClose={() => setRescheduleTarget(null)}
+        />
+      )}
+
+      {cancelTarget && (
+        <ConfirmModal
+          title="Cancel booking?"
+          variant="danger"
+          confirmLabel="Cancel booking"
+          cancelLabel="Keep booking"
+          message={
+            <div className="space-y-3">
+              <p>
+                <span className="text-foreground">{cancelTarget.customerName}</span>'s{" "}
+                <span className="text-foreground">{cancelTarget.serviceName}</span> appointment on{" "}
+                <span className="text-foreground font-mono-tech">
+                  {formatDateTime(cancelTarget.slotStart)}
+                </span>{" "}
+                will be cancelled.
+              </p>
+              <p>
+                Cal.com will email the customer with the cancellation. Use the Refund button on the
+                cancelled booking to issue a refund.
+              </p>
+            </div>
+          }
+          onConfirm={async () => {
+            await adminCancel({ bookingId: cancelTarget.bookingId });
+          }}
+          onClose={() => setCancelTarget(null)}
+        />
+      )}
+
+      {refundTarget && (
+        <RefundModal
+          bookingId={refundTarget.bookingId}
+          customerName={refundTarget.customerName}
+          depositAmountCents={refundTarget.depositAmountCents}
+          alreadyRefundedCents={refundTarget.alreadyRefundedCents}
+          onClose={() => setRefundTarget(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <>
+      <dt className="text-label-tech text-foreground-muted">{label}</dt>
+      <dd className="text-body-md">{children}</dd>
+    </>
   );
 }

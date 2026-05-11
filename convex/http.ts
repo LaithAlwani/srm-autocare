@@ -37,6 +37,32 @@ http.route({
       return new Response("Bad signature", { status: 400 });
     }
 
+    // Refund handler: catches refunds initiated from the Stripe dashboard
+    // (the admin Refund button updates our DB synchronously; this is for
+    // refunds done outside the app + as defense in depth). applyRefund is
+    // idempotent — safe to fire on every charge update.
+    if (event.type === "charge.refunded") {
+      const charge = event.data.object as import("stripe").Stripe.Charge;
+      const paymentIntentId =
+        typeof charge.payment_intent === "string"
+          ? charge.payment_intent
+          : (charge.payment_intent?.id ?? "");
+      if (!paymentIntentId) return new Response("no payment intent", { status: 200 });
+
+      const booking = await ctx.runQuery(internal.bookings.getInternalByPaymentIntent, {
+        paymentIntentId,
+      });
+      if (!booking) {
+        console.warn(`Refund webhook: no booking with payment intent ${paymentIntentId}`);
+        return new Response("ignored", { status: 200 });
+      }
+      await ctx.runMutation(internal.bookings.applyRefund, {
+        bookingId: booking._id,
+        totalRefundedCents: charge.amount_refunded,
+      });
+      return new Response("ok", { status: 200 });
+    }
+
     if (event.type !== "payment_intent.succeeded") {
       return new Response("ignored", { status: 200 });
     }
@@ -114,5 +140,102 @@ http.route({
     return new Response("ok", { status: 200 });
   }),
 });
+
+// Cal.com webhook: reflects rescheduling and cancellation made directly from
+// the customer's confirmation email back into our DB so /admin/bookings stays
+// authoritative. Configure in Cal.com → Settings → Developer → Webhooks:
+//   URL    https://<convex-site-url>/calcom/webhook
+//   Events BOOKING_RESCHEDULED, BOOKING_CANCELLED
+//   Secret stored as CALCOM_WEBHOOK_SECRET on the Convex deployment
+http.route({
+  path: "/calcom/webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const secret = process.env.CALCOM_WEBHOOK_SECRET;
+    if (!secret) return new Response("Missing CALCOM_WEBHOOK_SECRET", { status: 500 });
+
+    const sig = req.headers.get("x-cal-signature-256");
+    if (!sig) return new Response("Missing signature", { status: 400 });
+
+    const body = await req.text();
+    const expected = await hmacSha256Hex(secret, body);
+    if (!timingSafeEqual(expected, sig)) {
+      return new Response("Bad signature", { status: 400 });
+    }
+
+    type CalPayload = {
+      triggerEvent?: string;
+      payload?: {
+        uid?: string;
+        rescheduleUid?: string;
+        startTime?: string;
+        endTime?: string;
+        cancellationReason?: string;
+      };
+    };
+    let event: CalPayload;
+    try {
+      event = JSON.parse(body) as CalPayload;
+    } catch {
+      return new Response("Bad JSON", { status: 400 });
+    }
+
+    const trigger = event.triggerEvent;
+    const p = event.payload ?? {};
+
+    if (trigger === "BOOKING_RESCHEDULED") {
+      const oldUid = p.rescheduleUid;
+      const newUid = p.uid;
+      const start = p.startTime ? Date.parse(p.startTime) : NaN;
+      const end = p.endTime ? Date.parse(p.endTime) : NaN;
+      if (!oldUid || !newUid || !Number.isFinite(start) || !Number.isFinite(end)) {
+        console.error("Reschedule webhook missing fields", p);
+        return new Response("bad payload", { status: 400 });
+      }
+      await ctx.runMutation(internal.bookings.applyReschedule, {
+        oldUid,
+        newUid,
+        slotStart: start,
+        slotEnd: end,
+      });
+      // Cal.com sends customer + host emails for the reschedule itself —
+      // we don't fire any additional notification.
+      return new Response("ok", { status: 200 });
+    }
+
+    if (trigger === "BOOKING_CANCELLED") {
+      const uid = p.uid;
+      if (!uid) return new Response("bad payload", { status: 400 });
+      await ctx.runMutation(internal.bookings.markCancelled, { uid });
+      return new Response("ok", { status: 200 });
+    }
+
+    return new Response("ignored", { status: 200 });
+  }),
+});
+
+// HMAC-SHA256 of `body` using `secret`, hex-encoded. Uses Web Crypto so it
+// runs in Convex's default V8 runtime without needing "use node".
+async function hmacSha256Hex(secret: string, body: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const buf = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
 
 export default http;

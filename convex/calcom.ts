@@ -66,6 +66,60 @@ export const listSlots = action({
   },
 });
 
+// INTERNAL: cancel an existing Cal.com booking. Cal.com emails the customer
+// the cancellation. Idempotent — Cal.com returns 400/404 if it's already
+// cancelled, which we treat as success.
+export const cancelBookingInternal = internalAction({
+  args: {
+    bookingUid: v.string(),
+    reason: v.optional(v.string()),
+  },
+  handler: async (_ctx, args): Promise<void> => {
+    const res = await fetch(
+      `${CALCOM_BASE}/bookings/${args.bookingUid}/cancel`,
+      {
+        method: "POST",
+        headers: authHeaders("2024-08-13"),
+        body: JSON.stringify({
+          cancellationReason: args.reason ?? "Cancelled by admin",
+        }),
+      },
+    );
+    if (!res.ok && res.status !== 400 && res.status !== 404) {
+      const body = await res.text();
+      throw new Error(`Cal.com cancel failed: ${res.status} ${body}`);
+    }
+  },
+});
+
+// INTERNAL: reschedule an existing Cal.com booking to a new start time.
+// Cal.com will email the customer with the updated invite. The webhook
+// (BOOKING_RESCHEDULED) fires back to /calcom/webhook which updates our row.
+export const rescheduleBookingInternal = internalAction({
+  args: {
+    bookingUid: v.string(),
+    slotStartISO: v.string(),
+    reason: v.optional(v.string()),
+  },
+  handler: async (_ctx, args): Promise<void> => {
+    const res = await fetch(
+      `${CALCOM_BASE}/bookings/${args.bookingUid}/reschedule`,
+      {
+        method: "POST",
+        headers: authHeaders("2024-08-13"),
+        body: JSON.stringify({
+          start: args.slotStartISO,
+          reschedulingReason: args.reason ?? "Rescheduled by admin",
+        }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Cal.com reschedule failed: ${res.status} ${body}`);
+    }
+  },
+});
+
 // INTERNAL: actually creates a booking in Cal.com after Stripe confirms payment.
 // Called from the webhook handler in http.ts which provides the resolved eventTypeId.
 export const createBookingInternal = internalAction({

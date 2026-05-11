@@ -2,7 +2,7 @@
 
 import { v } from "convex/values";
 import Stripe from "stripe";
-import { action } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { api } from "./_generated/api";
 
 function stripeClient() {
@@ -72,5 +72,36 @@ export const createPaymentIntent = action({
       throw new Error("Stripe did not return a client secret");
     }
     return { clientSecret: intent.client_secret, paymentIntentId: intent.id };
+  },
+});
+
+// INTERNAL: refund a previously-captured PaymentIntent. If amountCents is
+// omitted Stripe issues a full refund; otherwise it's a partial refund.
+// In test mode refunds typically settle instantly; in prod they take 5–10
+// business days to appear on the customer's statement. We update the booking
+// row as soon as Stripe accepts the request; the charge.refunded webhook
+// later re-confirms via the same idempotent path.
+export const createRefundInternal = internalAction({
+  args: {
+    paymentIntentId: v.string(),
+    amountCents: v.optional(v.number()),
+    reason: v.optional(v.string()),
+  },
+  handler: async (
+    _ctx,
+    args,
+  ): Promise<{ refundId: string; status: string; amountCents: number }> => {
+    const stripe = stripeClient();
+    const refund = await stripe.refunds.create({
+      payment_intent: args.paymentIntentId,
+      ...(args.amountCents ? { amount: args.amountCents } : {}),
+      reason: "requested_by_customer",
+      metadata: args.reason ? { reason: args.reason.slice(0, 500) } : undefined,
+    });
+    return {
+      refundId: refund.id,
+      status: refund.status ?? "unknown",
+      amountCents: refund.amount,
+    };
   },
 });

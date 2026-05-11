@@ -77,17 +77,25 @@ export default defineSchema({
     calComBookingId: v.optional(v.string()),
     slotStart: v.number(),
     slotEnd: v.number(),
+    // The original booked time, only set once the first time the booking is
+    // rescheduled. Lets the admin see "originally booked for X, now Y".
+    originalSlotStart: v.optional(v.number()),
+    originalSlotEnd: v.optional(v.number()),
+    rescheduledAt: v.optional(v.number()),
     depositAmountCents: v.number(),
+    // Total refunded so far across all refund events on this booking. Lets us
+    // tell partial vs full refunds and allow further partial refunds up to
+    // the remaining balance.
+    refundedAmountCents: v.optional(v.number()),
     stripeSessionId: v.optional(v.string()),
     stripePaymentIntentId: v.optional(v.string()),
     paymentStatus: v.union(
-      v.literal("pending"),
       v.literal("paid"),
       v.literal("failed"),
       v.literal("refunded"),
+      v.literal("partially_refunded"),
     ),
     status: v.union(
-      v.literal("pending"),
       v.literal("confirmed"),
       v.literal("cancelled"),
       v.literal("completed"),
@@ -98,5 +106,6 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_slot_start", ["slotStart"])
     .index("by_stripe_session", ["stripeSessionId"])
-    .index("by_payment_intent", ["stripePaymentIntentId"]),
+    .index("by_payment_intent", ["stripePaymentIntentId"])
+    .index("by_calcom_uid", ["calComBookingId"]),
 });
