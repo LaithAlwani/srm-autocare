@@ -1,26 +1,233 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ============================================================================
+ * MIDNIGHT PRECISION — design system
+ * Single source of truth for every color, font, and effect used in the site.
+ * Change a value here → changes everywhere. Do NOT hardcode hex codes in JSX.
+ * Mirror in config/theme.ts when you also need the value in JS.
+ * ========================================================================== */
+@theme {
+  /* ---- Surfaces (tonal layering, dark → light) ---- */
+  --color-surface: #131313;
+  --color-surface-container-lowest: #0e0e0e;
+  --color-surface-container-low: #1c1b1b;
+  --color-surface-container: #201f1f;
+  --color-surface-container-high: #2a2a2a;
+  --color-surface-container-highest: #353534;
+  --color-surface-bright: #393939;
+
+  /* ---- Brand ---- */
+  --color-primary: #007aff;
+  --color-primary-hover: #3393ff;
+  --color-primary-muted: #adc6ff;
+  --color-primary-container: #4b8eff;
+  --color-on-primary: #ffffff;
+  --color-on-primary-container: #00285c;
+
+  /* ---- Text ---- */
+  --color-foreground: #e5e2e1;
+  --color-foreground-muted: #c1c6d7;
+  --color-chrome: #e5e5e5;
+
+  /* ---- Lines / outlines ---- */
+  --color-outline: #8b90a0;
+  --color-outline-variant: #414755;
+  --color-border: rgba(229, 229, 229, 0.1);
+  --color-border-hover: rgba(173, 198, 255, 0.4);
+
+  /* ---- Semantic ---- */
+  --color-success: #34d399;
+  --color-error: #ffb4ab;
+  --color-error-container: #93000a;
+  --color-on-error: #690005;
+
+  /* ---- Aliases (legacy compatibility) ---- */
+  --color-background: var(--color-surface);
+  --color-muted: var(--color-foreground-muted);
+
+  /* ---- Typography ---- */
+  --font-display: var(--font-hanken);
+  --font-body: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+  --font-sans: var(--font-inter);
+
+  /* ---- Spacing tokens (mirror Stitch design system) ---- */
+  --spacing-gutter: 24px;
+  --spacing-margin-mobile: 16px;
+  --spacing-section-gap-desktop: 80px;
+  --spacing-section-gap-mobile: 48px;
+  --container-max: 1280px;
+
+  /* ---- Radius (sharp by design) ---- */
+  --radius-none: 0px;
+  --radius-default: 0px;
+  --radius-full: 9999px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Body baseline */
+body {
+  background: var(--color-surface);
+  color: var(--color-foreground);
+  font-family: var(--font-body), system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+::selection {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+/* Default: every element has zero corner radius. */
+* {
+  border-radius: 0;
+}
+.rounded-full,
+[class*="rounded-full"] {
+  border-radius: 9999px;
+}
+
+/* ============================================================================
+ * TYPOGRAPHY UTILITIES
+ * ========================================================================== */
+@layer utilities {
+  .font-display {
+    font-family: var(--font-display), system-ui, sans-serif;
+  }
+  .font-mono-tech {
+    font-family: var(--font-mono), ui-monospace, monospace;
+  }
+
+  .text-display {
+    font-family: var(--font-display), system-ui, sans-serif;
+    font-size: clamp(36px, 6vw, 48px);
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+  }
+  .text-headline-lg {
+    font-family: var(--font-display), system-ui, sans-serif;
+    font-size: clamp(24px, 4vw, 32px);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+  }
+  .text-headline-md {
+    font-family: var(--font-display), system-ui, sans-serif;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .text-body-lg {
+    font-family: var(--font-body), system-ui, sans-serif;
+    font-size: 18px;
+    font-weight: 400;
+    line-height: 1.6;
+  }
+  .text-body-md {
+    font-family: var(--font-body), system-ui, sans-serif;
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 1.6;
+  }
+  .text-label-tech {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ============================================================================
+ * MIDNIGHT PRECISION COMPONENT EFFECTS
+ * Reflective gloss, blue glow, etc. Reference these as classes from JSX.
+ * ========================================================================== */
+@layer utilities {
+  .gloss-card {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 100%);
+    border: 1px solid var(--color-border);
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+  }
+  .gloss-card:hover {
+    border-color: var(--color-border-hover);
+    box-shadow: 0 0 15px rgba(0, 122, 255, 0.15);
+  }
+
+  .glow-blue {
+    box-shadow: 0 0 15px rgba(0, 122, 255, 0.3);
+  }
+  .glow-blue-soft {
+    box-shadow: 0 0 15px rgba(0, 122, 255, 0.15);
+  }
+
+  .text-glow {
+    text-shadow: 0 0 10px rgba(173, 198, 255, 0.5);
+  }
+
+  /* Container at the design's max-width (1280px). Use instead of max-w-7xl. */
+  .container-stitch {
+    max-width: var(--container-max);
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: var(--spacing-gutter);
+    padding-right: var(--spacing-gutter);
+  }
+
+  /* Section vertical rhythm (48px mobile, 80px desktop). */
+  .section-y {
+    padding-top: var(--spacing-section-gap-mobile);
+    padding-bottom: var(--spacing-section-gap-mobile);
+  }
+  @media (min-width: 768px) {
+    .section-y {
+      padding-top: var(--spacing-section-gap-desktop);
+      padding-bottom: var(--spacing-section-gap-desktop);
+    }
+  }
+}
+
+/* ============================================================================
+ * KEYFRAMES (used by Framer Motion fallbacks + a few CSS-only animations)
+ * ========================================================================== */
+@layer utilities {
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes pulse-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 12px rgba(0, 122, 255, 0.3);
+    }
+    50% {
+      box-shadow: 0 0 24px rgba(0, 122, 255, 0.5);
+    }
+  }
+  .animate-fade-in {
+    animation: fade-in 400ms ease-out both;
+  }
+  .animate-slide-up {
+    animation: slide-up 500ms ease-out both;
+  }
+  .animate-pulse-glow {
+    animation: pulse-glow 2.4s ease-in-out infinite;
+  }
 }
