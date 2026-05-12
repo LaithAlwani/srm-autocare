@@ -11,6 +11,8 @@ import { ButtonLink } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { resolveIcon } from "@/lib/icons";
 import { siteConfig } from "@/config/site";
+import { heroMedia } from "@/config/media";
+import { HeroMedia } from "@/components/hero-media";
 
 type SiteHero = {
   eyebrow?: string;
@@ -53,8 +55,7 @@ export default function HomePage() {
     <div>
       {/* HERO */}
       <section className="relative h-[88vh] min-h-[600px] flex items-center justify-center overflow-hidden">
-        <div className="absolute inset-0 bg-surface-container-low" />
-        <div className="absolute inset-0 bg-gradient-to-t from-surface via-transparent to-surface/40" />
+        <HeroMedia kind="video" src={heroMedia.homeHeroVideo} dim={45} />
         <Container className="relative z-10 text-center">
           <motion.div
             initial={{ opacity: 0, y: 12 }}
@@ -241,8 +242,17 @@ export default function HomePage() {
                 </div>
               </div>
               <div className="relative h-[600px] gloss-card overflow-hidden hidden md:block">
-                <div className="absolute inset-0 bg-gradient-to-r from-surface to-transparent z-10" />
-                <div className="absolute inset-0 bg-surface-container-high" />
+                {/* TODO: swap to a hero showcase image when one is available
+                    (the reviews section currently reuses one of the detail
+                    photos so the area isn't a flat dark block). */}
+                <Image
+                  src={heroMedia.servicesHero}
+                  alt="Detailed vehicle showcase"
+                  fill
+                  sizes="50vw"
+                  className="object-cover"
+                />
+                <div className="absolute inset-0 bg-linear-to-r from-surface via-surface/40 to-transparent z-10" />
               </div>
             </div>
           </Container>
@@ -250,8 +260,9 @@ export default function HomePage() {
       )}
 
       {/* CTA */}
-      <section className="bg-primary text-on-primary section-y" id="booking">
-        <Container className="text-center max-w-4xl">
+      <section className="relative section-y text-on-primary overflow-hidden" id="booking">
+        <HeroMedia kind="video" src={heroMedia.homeCtaVideo} dim={20} tint="primary" />
+        <Container className="relative z-10 text-center max-w-4xl">
           <h2 className="text-display uppercase mb-8 tracking-tighter">Restore the gloss</h2>
           <p className="text-body-lg text-on-primary/80 mb-12 uppercase tracking-widest font-bold">
             Limited monthly slots available for bespoke detailing.

@@ -1,11 +1,14 @@
 "use client";
 
+import Image from "next/image";
 import { motion } from "framer-motion";
 import { Award, Target, Users } from "lucide-react";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { ButtonLink } from "@/components/ui/button";
+import { HeroMedia } from "@/components/hero-media";
 import { siteConfig } from "@/config/site";
+import { heroMedia } from "@/config/media";
 
 const VALUES = [
   {
@@ -28,8 +31,9 @@ const VALUES = [
 export default function AboutPage() {
   return (
     <div>
-      <section className="section-y border-b border-border">
-        <Container>
+      <section className="relative section-y border-b border-border overflow-hidden">
+        <HeroMedia kind="image" src={heroMedia.aboutHero} dim={70} />
+        <Container className="relative z-10">
           <Eyebrow className="mb-4">About</Eyebrow>
           <h1 className="text-display uppercase tracking-tighter mb-6 max-w-3xl">
             Engineered for the discerning owner
@@ -45,7 +49,15 @@ export default function AboutPage() {
         <Container>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
             <div className="aspect-4/5 bg-surface-container relative overflow-hidden gloss-card">
-              <div className="absolute inset-0 bg-linear-to-tr from-surface to-surface-container-high" />
+              {/* TODO: replace with the actual shop / team photo when available. */}
+              <Image
+                src={heroMedia.aboutPortrait}
+                alt="Inside the studio"
+                fill
+                className="object-cover"
+                sizes="(max-width: 768px) 100vw, 50vw"
+              />
+              <div className="absolute inset-0 bg-linear-to-tr from-surface/40 via-transparent to-transparent" />
             </div>
             <div>
               <h2 className="text-headline-lg uppercase mb-6">Our story</h2>

@@ -21,6 +21,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
+import { HeroMedia } from "@/components/hero-media";
+import { heroMedia } from "@/config/media";
 import { StripePaymentForm } from "@/components/stripe-payment-form";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 import { resolveIcon } from "@/lib/icons";
@@ -247,8 +249,9 @@ export default function BookPage() {
 
   return (
     <div>
-      <section className="section-y border-b border-border">
-        <Container>
+      <section className="relative section-y border-b border-border overflow-hidden">
+        <HeroMedia kind="image" src={heroMedia.bookHero} dim={70} />
+        <Container className="relative z-10">
           <Eyebrow className="mb-4">Book an Appointment</Eyebrow>
           <h1 className="text-display uppercase tracking-tighter mb-6 max-w-3xl">
             Reserve your slot

@@ -8,6 +8,8 @@ import { api } from "@/convex/_generated/api";
 import { Container } from "@/components/ui/container";
 import { ButtonLink } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/eyebrow";
+import { HeroMedia } from "@/components/hero-media";
+import { heroMedia } from "@/config/media";
 import { resolveIcon } from "@/lib/icons";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 
@@ -17,8 +19,9 @@ export default function ServicesPage() {
   return (
     <div>
       {/* HEADER */}
-      <section className="section-y border-b border-border">
-        <Container>
+      <section className="relative section-y border-b border-border overflow-hidden">
+        <HeroMedia kind="image" src={heroMedia.servicesHero} dim={70} />
+        <Container className="relative z-10">
           <Eyebrow className="mb-4">Service Catalog</Eyebrow>
           <h1 className="text-display uppercase tracking-tighter mb-6 max-w-3xl">
             Engineered detailing programs

@@ -7,6 +7,8 @@ import { api } from "@/convex/_generated/api";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { BeforeAfterSlider } from "@/components/before-after-slider";
+import { HeroMedia } from "@/components/hero-media";
+import { heroMedia } from "@/config/media";
 
 export default function GalleryPage() {
   const items = useQuery(api.gallery.list, {});
@@ -19,8 +21,9 @@ export default function GalleryPage() {
 
   return (
     <div>
-      <section className="section-y border-b border-border">
-        <Container>
+      <section className="relative section-y border-b border-border overflow-hidden">
+        <HeroMedia kind="image" src={heroMedia.galleryHero} dim={70} />
+        <Container className="relative z-10">
           <Eyebrow className="mb-4">Results Gallery</Eyebrow>
           <h1 className="text-display uppercase tracking-tighter mb-6 max-w-3xl">
             Before. After. Surgical precision.

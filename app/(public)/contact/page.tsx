@@ -7,7 +7,9 @@ import { api } from "@/convex/_generated/api";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
+import { HeroMedia } from "@/components/hero-media";
 import { siteConfig } from "@/config/site";
+import { heroMedia } from "@/config/media";
 
 type Status = "idle" | "sending" | "sent" | "error";
 
@@ -38,8 +40,9 @@ export default function ContactPage() {
 
   return (
     <div>
-      <section className="section-y border-b border-border">
-        <Container>
+      <section className="relative section-y border-b border-border overflow-hidden">
+        <HeroMedia kind="image" src={heroMedia.contactHero} dim={70} />
+        <Container className="relative z-10">
           <Eyebrow className="mb-4">Contact</Eyebrow>
           <h1 className="text-display uppercase tracking-tighter mb-6 max-w-3xl">
             Get in touch
