@@ -12,6 +12,8 @@ import { RescheduleModal } from "@/components/admin/reschedule-modal";
 import { ConfirmModal } from "@/components/admin/confirm-modal";
 import { RefundModal } from "@/components/admin/refund-modal";
 
+// Note: `pending` deliberately excluded — those rows are mid-checkout drafts
+// that listForAdmin already filters out. The admin only ever sees real bookings.
 const FILTERS = ["all", "confirmed", "cancelled", "completed"] as const;
 type Filter = (typeof FILTERS)[number];
 
@@ -268,7 +270,7 @@ export default function AdminBookingsPage() {
                   {isCancelled &&
                     b.paymentStatus !== "refunded" &&
                     b.paymentStatus !== "failed" &&
-                    b.stripePaymentIntentId && (
+                    b.monerisTxnId && (
                       <button
                         type="button"
                         onClick={() =>

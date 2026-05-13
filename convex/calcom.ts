@@ -67,7 +67,7 @@ export const listSlots = action({
     }
     // Response shape (2024-09-04): { status: "success", data: { "YYYY-MM-DD": [{ start }] } }
     // Cal.com is the single source of truth for availability — confirmed bookings
-    // are pushed to Cal.com from the Stripe webhook, so it knows about all of them.
+    // are pushed to Cal.com after Moneris confirms payment, so it knows about all of them.
     const json = (await res.json()) as { data?: Record<string, Array<{ start: string }>> };
     const day = json.data?.[args.dateISO.slice(0, 10)] ?? [];
     return day.map((slot) => slot.start);
@@ -272,7 +272,7 @@ export const rescheduleBookingInternal = internalAction({
   },
 });
 
-// INTERNAL: actually creates a booking in Cal.com after Stripe confirms payment.
+// INTERNAL: actually creates a booking in Cal.com after Moneris confirms payment.
 // Called from the webhook handler in http.ts which provides the resolved eventTypeId.
 export const createBookingInternal = internalAction({
   args: {

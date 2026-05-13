@@ -11,15 +11,17 @@
 import type * as auth from "../auth.js";
 import type * as bookings from "../bookings.js";
 import type * as calcom from "../calcom.js";
+import type * as cleanup from "../cleanup.js";
 import type * as contact from "../contact.js";
+import type * as crons from "../crons.js";
 import type * as files from "../files.js";
 import type * as gallery from "../gallery.js";
 import type * as http from "../http.js";
+import type * as moneris from "../moneris.js";
 import type * as reviews from "../reviews.js";
 import type * as seed from "../seed.js";
 import type * as services from "../services.js";
 import type * as siteContent from "../siteContent.js";
-import type * as stripe from "../stripe.js";
 import type * as users from "../users.js";
 
 import type {
@@ -32,15 +34,17 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   bookings: typeof bookings;
   calcom: typeof calcom;
+  cleanup: typeof cleanup;
   contact: typeof contact;
+  crons: typeof crons;
   files: typeof files;
   gallery: typeof gallery;
   http: typeof http;
+  moneris: typeof moneris;
   reviews: typeof reviews;
   seed: typeof seed;
   services: typeof services;
   siteContent: typeof siteContent;
-  stripe: typeof stripe;
   users: typeof users;
 }>;
 

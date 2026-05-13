@@ -163,7 +163,7 @@ export function RefundModal({
               className="w-full bg-surface-container-low px-4 py-3 text-body-md text-foreground border-0 border-b border-chrome focus:outline-none focus:border-primary resize-none"
             />
             <p className="text-label-tech text-foreground-muted mt-1">
-              Stored as Stripe metadata. The customer doesn't see this.
+              Internal note for your records. The customer doesn't see this.
             </p>
           </div>
 

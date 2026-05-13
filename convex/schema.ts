@@ -87,15 +87,26 @@ export default defineSchema({
     // tell partial vs full refunds and allow further partial refunds up to
     // the remaining balance.
     refundedAmountCents: v.optional(v.number()),
+    // Moneris identifiers. `monerisOrderId` is OUR generated unique order
+    // number — used as the idempotency key (also flows to Moneris as `order_no`).
+    // `monerisTxnId` is Moneris's id from the receipt response, required for
+    // refunds against the original transaction.
+    monerisOrderId: v.optional(v.string()),
+    monerisTxnId: v.optional(v.string()),
+    // Deprecated — kept on the schema only so existing rows from the Stripe
+    // era still validate. New bookings never write these. Safe to remove
+    // alongside a one-shot delete-fields migration.
     stripeSessionId: v.optional(v.string()),
     stripePaymentIntentId: v.optional(v.string()),
     paymentStatus: v.union(
+      v.literal("pending"),
       v.literal("paid"),
       v.literal("failed"),
       v.literal("refunded"),
       v.literal("partially_refunded"),
     ),
     status: v.union(
+      v.literal("pending"),
       v.literal("confirmed"),
       v.literal("cancelled"),
       v.literal("completed"),
@@ -105,7 +116,6 @@ export default defineSchema({
     .index("by_email", ["customerEmail"])
     .index("by_status", ["status"])
     .index("by_slot_start", ["slotStart"])
-    .index("by_stripe_session", ["stripeSessionId"])
-    .index("by_payment_intent", ["stripePaymentIntentId"])
+    .index("by_moneris_order", ["monerisOrderId"])
     .index("by_calcom_uid", ["calComBookingId"]),
 });

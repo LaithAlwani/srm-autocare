@@ -14,8 +14,6 @@ import {
   Clock,
   Loader2,
 } from "lucide-react";
-import { loadStripe, type Stripe, type StripeElementsOptions } from "@stripe/stripe-js";
-import { Elements } from "@stripe/react-stripe-js";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Container } from "@/components/ui/container";
@@ -23,67 +21,9 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
 import { HeroMedia } from "@/components/hero-media";
 import { heroMedia } from "@/config/media";
-import { StripePaymentForm } from "@/components/stripe-payment-form";
+import { MonerisPaymentForm } from "@/components/moneris-payment-form";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 import { resolveIcon } from "@/lib/icons";
-
-// Midnight Precision palette mapped to Stripe Elements appearance API.
-// Stripe needs literal hex strings here — keep in sync with app/globals.css.
-const STRIPE_APPEARANCE: StripeElementsOptions["appearance"] = {
-  theme: "night",
-  labels: "above",
-  variables: {
-    colorPrimary: "#007aff",
-    colorBackground: "#201f1f",
-    colorText: "#e5e2e1",
-    colorTextSecondary: "#c1c6d7",
-    colorTextPlaceholder: "#8b90a0",
-    colorDanger: "#ffb4ab",
-    colorIcon: "#c1c6d7",
-    colorIconTab: "#c1c6d7",
-    colorIconTabSelected: "#007aff",
-    fontFamily: "Inter, system-ui, sans-serif",
-    fontSizeBase: "16px",
-    fontWeightNormal: "400",
-    spacingUnit: "4px",
-    borderRadius: "0px",
-    focusBoxShadow: "0 0 0 1px #007aff",
-    focusOutline: "none",
-  },
-  rules: {
-    ".Input": {
-      backgroundColor: "#201f1f",
-      border: "1px solid rgba(229, 229, 229, 0.1)",
-      boxShadow: "none",
-      padding: "12px 14px",
-    },
-    ".Input:focus": {
-      borderColor: "#007aff",
-      boxShadow: "0 0 0 1px #007aff",
-    },
-    ".Label": {
-      fontFamily: "JetBrains Mono, ui-monospace, monospace",
-      fontSize: "12px",
-      letterSpacing: "0.1em",
-      textTransform: "uppercase",
-      color: "#c1c6d7",
-      marginBottom: "8px",
-    },
-    ".Tab": {
-      backgroundColor: "#201f1f",
-      border: "1px solid rgba(229, 229, 229, 0.1)",
-      boxShadow: "none",
-    },
-    ".Tab:hover": {
-      backgroundColor: "#2a2a2a",
-    },
-    ".Tab--selected": {
-      backgroundColor: "#2a2a2a",
-      borderColor: "#007aff",
-      boxShadow: "0 0 0 1px #007aff",
-    },
-  },
-};
 
 type Step = 0 | 1 | 2 | 3;
 const STEP_LABELS: Record<Step, string> = {
@@ -92,20 +32,6 @@ const STEP_LABELS: Record<Step, string> = {
   2: "Details",
   3: "Payment",
 };
-
-// Loaded once at module scope per Stripe.js best practice — calling loadStripe
-// inside the component would re-create the script tag on every render.
-let stripePromise: Promise<Stripe | null> | null = null;
-function getStripe() {
-  if (!stripePromise) {
-    const key = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-    if (!key) {
-      throw new Error("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY is not set");
-    }
-    stripePromise = loadStripe(key);
-  }
-  return stripePromise;
-}
 
 // Today as `YYYY-MM-DD` in the browser's local zone. Used as the lower bound
 // on the date picker — we never let the customer pick a day in the past.
@@ -138,7 +64,7 @@ export default function BookPage() {
   const services = useQuery(api.services.list, {});
   const listSlots = useAction(api.calcom.listSlots);
   const findNextAvailableDate = useAction(api.calcom.findNextAvailableDate);
-  const createPaymentIntent = useAction(api.stripe.createPaymentIntent);
+  const createCheckoutPreload = useAction(api.moneris.createCheckoutPreload);
 
   const [step, setStep] = useState<Step>(0);
   const [serviceId, setServiceId] = useState<Id<"services"> | null>(
@@ -166,7 +92,13 @@ export default function BookPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  // Moneris hands us a one-shot ticket + the order number we generated. Both
+  // are required to mount the iframe and to verify the payment server-side.
+  const [paymentSession, setPaymentSession] = useState<{
+    ticket: string;
+    orderNo: string;
+    env: "qa" | "prod";
+  } | null>(null);
 
   const selectedService = useMemo(
     () => (serviceId ? services?.find((s) => s._id === serviceId) ?? null : null),
@@ -228,7 +160,7 @@ export default function BookPage() {
       const slotStart = new Date(slotStartISO).getTime();
       const slotEnd = slotStart + selectedService.durationMinutes * 60 * 1000;
 
-      const { clientSecret: cs } = await createPaymentIntent({
+      const session = await createCheckoutPreload({
         serviceId,
         slotStart,
         slotEnd,
@@ -238,7 +170,7 @@ export default function BookPage() {
         vehicleInfo: details.vehicleInfo.trim(),
         notes: details.notes.trim() || undefined,
       });
-      setClientSecret(cs);
+      setPaymentSession(session);
       setStep(3);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not create booking.");
@@ -587,7 +519,7 @@ export default function BookPage() {
               </motion.div>
             )}
 
-            {step === 3 && selectedService && slotStartISO && clientSecret && (
+            {step === 3 && selectedService && slotStartISO && paymentSession && (
               <motion.div
                 key="step-3"
                 initial={{ opacity: 0, y: 8 }}
@@ -597,17 +529,12 @@ export default function BookPage() {
                 <h2 className="text-headline-lg uppercase mb-8">Payment</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2">
-                    <div className="gloss-card p-8">
-                      <Elements
-                        stripe={getStripe()}
-                        options={{ clientSecret, appearance: STRIPE_APPEARANCE }}
-                      >
-                        <StripePaymentForm
-                          returnUrl={`${window.location.origin}/book/success`}
-                          customerEmail={details.customerEmail.trim()}
-                          amountLabel={formatPriceFromCents(selectedService.depositCents)}
-                        />
-                      </Elements>
+                    <div className="gloss-card p-4 md:p-6">
+                      <MonerisPaymentForm
+                        ticket={paymentSession.ticket}
+                        orderNo={paymentSession.orderNo}
+                        env={paymentSession.env}
+                      />
                     </div>
                   </div>
                   <aside className="gloss-card p-8 self-start">
@@ -645,7 +572,7 @@ export default function BookPage() {
                     variant="ghost"
                     size="lg"
                     onClick={() => {
-                      setClientSecret(null);
+                      setPaymentSession(null);
                       setStep(2);
                     }}
                   >

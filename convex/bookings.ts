@@ -3,18 +3,23 @@ import { query, mutation, action, internalMutation, internalQuery } from "./_gen
 import { api, internal } from "./_generated/api";
 import { requireAdmin } from "./users";
 
-// PUBLIC: success page polls this with a stripe payment intent id to show
-// confirmation. Returns null until the webhook has processed the payment and
-// inserted the row. (We also support stripeSessionId for backward compat with
-// any older Checkout-based bookings.)
-export const getByPaymentIntent = query({
-  args: { paymentIntentId: v.string() },
+// Status enums kept in one place so every validator on this file stays in sync.
+const STATUS_LITERALS = [
+  v.literal("pending"),
+  v.literal("confirmed"),
+  v.literal("cancelled"),
+  v.literal("completed"),
+] as const;
+
+// PUBLIC: success page polls this with a Moneris order number to show
+// confirmation. Returns null until verifyAndConfirm (or the webhook) has
+// promoted the draft row to confirmed/paid.
+export const getByMonerisOrder = query({
+  args: { orderNo: v.string() },
   handler: async (ctx, args) => {
     const booking = await ctx.db
       .query("bookings")
-      .withIndex("by_payment_intent", (q) =>
-        q.eq("stripePaymentIntentId", args.paymentIntentId),
-      )
+      .withIndex("by_moneris_order", (q) => q.eq("monerisOrderId", args.orderNo))
       .unique();
     if (!booking) return null;
     const service = await ctx.db.get(booking.serviceId);
@@ -22,35 +27,50 @@ export const getByPaymentIntent = query({
   },
 });
 
-export const getBySession = query({
-  args: { stripeSessionId: v.string() },
+// INTERNAL: same lookup as getByMonerisOrder but available to the webhook
+// + verifyAndConfirm without needing auth context.
+export const getInternalByMonerisOrder = internalQuery({
+  args: { orderNo: v.string() },
   handler: async (ctx, args) => {
-    const booking = await ctx.db
+    return await ctx.db
       .query("bookings")
-      .withIndex("by_stripe_session", (q) =>
-        q.eq("stripeSessionId", args.stripeSessionId),
-      )
+      .withIndex("by_moneris_order", (q) => q.eq("monerisOrderId", args.orderNo))
       .unique();
-    if (!booking) return null;
-    const service = await ctx.db.get(booking.serviceId);
-    return { ...booking, serviceName: service?.name ?? "Service" };
   },
 });
 
-// INTERNAL: webhook calls this FIRST after Stripe confirms payment, BEFORE
-// touching Cal.com. Returns `{ id, isNew }` so the caller can tell whether
-// this invocation actually inserted the row (isNew=true) or found a
-// previously-inserted row (isNew=false). Convex serializes mutations on the
-// same document, so even if Stripe delivers the webhook twice in parallel,
-// only the first call sees isNew=true. Caller uses this to gate side effects
-// like the Cal.com booking — preventing duplicate calendar entries / emails.
-//
-// Keyed on stripePaymentIntentId — every PaymentIntent is unique to one
-// payment attempt, so this is the right idempotency key for the
-// `payment_intent.succeeded` webhook event.
-export const upsertFromWebhook = internalMutation({
+// INTERNAL: lookup for the Moneris refund webhook — finds bookings by their
+// Moneris transaction id (set when payment was confirmed).
+export const getInternalByMonerisTxn = internalQuery({
+  args: { monerisTxnId: v.string() },
+  handler: async (ctx, args) => {
+    // No dedicated index; scans the most recent few hundred bookings for the
+    // matching txn id. Fine at our scale (a single shop), and avoids burning
+    // an index slot on a low-cardinality use case.
+    const recent = await ctx.db.query("bookings").order("desc").take(500);
+    return recent.find((b) => b.monerisTxnId === args.monerisTxnId) ?? null;
+  },
+});
+
+// INTERNAL: bundle a booking + its service for the Moneris confirmation
+// flow, which needs both to call Cal.com.
+export const getForCalcomDispatch = internalQuery({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    const service = await ctx.db.get(booking.serviceId);
+    return { booking, service };
+  },
+});
+
+// INTERNAL: insert a draft booking BEFORE the Moneris iframe is shown, so
+// the verify call + webhook can find it by order number and so the slot is
+// effectively soft-held while the customer is in checkout. Status starts at
+// pending; the cron sweeps abandoned drafts after 30 minutes.
+export const createDraft = internalMutation({
   args: {
-    stripePaymentIntentId: v.string(),
+    monerisOrderId: v.string(),
     serviceId: v.id("services"),
     slotStart: v.number(),
     slotEnd: v.number(),
@@ -62,15 +82,8 @@ export const upsertFromWebhook = internalMutation({
     depositAmountCents: v.number(),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("bookings")
-      .withIndex("by_payment_intent", (q) =>
-        q.eq("stripePaymentIntentId", args.stripePaymentIntentId),
-      )
-      .unique();
-    if (existing) return { id: existing._id, isNew: false };
-    const id = await ctx.db.insert("bookings", {
-      stripePaymentIntentId: args.stripePaymentIntentId,
+    return await ctx.db.insert("bookings", {
+      monerisOrderId: args.monerisOrderId,
       serviceId: args.serviceId,
       slotStart: args.slotStart,
       slotEnd: args.slotEnd,
@@ -80,16 +93,44 @@ export const upsertFromWebhook = internalMutation({
       vehicleInfo: args.vehicleInfo,
       notes: args.notes,
       depositAmountCents: args.depositAmountCents,
-      paymentStatus: "paid",
-      status: "confirmed",
+      paymentStatus: "pending",
+      status: "pending",
       createdAt: Date.now(),
     });
-    return { id, isNew: true };
+  },
+});
+
+// INTERNAL: promote a draft booking to confirmed/paid once Moneris confirms
+// payment. Idempotent — running twice (once from verifyAndConfirm, once from
+// the async webhook) is safe; only the first call returns isNew=true so the
+// caller can gate Cal.com side effects.
+export const confirmFromMoneris = internalMutation({
+  args: {
+    orderNo: v.string(),
+    monerisTxnId: v.string(),
+    amountCents: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db
+      .query("bookings")
+      .withIndex("by_moneris_order", (q) => q.eq("monerisOrderId", args.orderNo))
+      .unique();
+    if (!booking) {
+      throw new Error(`No draft booking for Moneris order ${args.orderNo}`);
+    }
+    if (booking.paymentStatus === "paid" || booking.status === "confirmed") {
+      return { id: booking._id, isNew: false };
+    }
+    await ctx.db.patch(booking._id, {
+      monerisTxnId: args.monerisTxnId,
+      paymentStatus: "paid",
+      status: "confirmed",
+    });
+    return { id: booking._id, isNew: true };
   },
 });
 
 // INTERNAL: stamp the Cal.com booking id onto a row after we've placed it.
-// Called only by the webhook, only for newly-inserted bookings.
 export const setCalcomBookingId = internalMutation({
   args: { bookingId: v.id("bookings"), calComBookingId: v.string() },
   handler: async (ctx, args) => {
@@ -97,7 +138,7 @@ export const setCalcomBookingId = internalMutation({
   },
 });
 
-// INTERNAL: lookup helper used by the Cal.com webhook + notification action.
+// INTERNAL: lookup helper used by the Cal.com webhook + reschedule action.
 export const getByCalcomUid = internalQuery({
   args: { calComBookingId: v.string() },
   handler: async (ctx, args) => {
@@ -116,8 +157,7 @@ export const getByCalcomUid = internalQuery({
 // INTERNAL: applied when Cal.com fires BOOKING_RESCHEDULED. The reschedule
 // webhook payload references the OLD booking via `rescheduleUid` and ships a
 // brand-new `uid` for the new booking — we swap the row's calComBookingId
-// over and patch the new times. Returns the previous slot so the notifier
-// can render a "moved from X to Y" email.
+// over and patch the new times.
 export const applyReschedule = internalMutation({
   args: {
     oldUid: v.string(),
@@ -135,9 +175,6 @@ export const applyReschedule = internalMutation({
       return null;
     }
     const previous = { slotStart: booking.slotStart, slotEnd: booking.slotEnd };
-    // Capture the very first booked time once. Subsequent reschedules update
-    // slotStart/slotEnd but leave originalSlotStart untouched so the admin
-    // always sees the true original.
     const captureOriginal = booking.originalSlotStart === undefined;
     await ctx.db.patch(booking._id, {
       calComBookingId: args.newUid,
@@ -171,16 +208,12 @@ export const markCancelled = internalMutation({
   },
 });
 
-// ADMIN: paginated list with optional status filter.
+// ADMIN: paginated list with optional status filter. We exclude `pending`
+// rows by default — those are mid-checkout drafts that haven't paid yet,
+// and they get auto-swept by the cleanup cron. Admins should never see them.
 export const listForAdmin = query({
   args: {
-    status: v.optional(
-      v.union(
-        v.literal("confirmed"),
-        v.literal("cancelled"),
-        v.literal("completed"),
-      ),
-    ),
+    status: v.optional(v.union(...STATUS_LITERALS)),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -192,7 +225,15 @@ export const listForAdmin = query({
           .withIndex("by_status", (q) => q.eq("status", args.status!))
           .order("desc")
           .take(limit)
-      : await ctx.db.query("bookings").order("desc").take(limit);
+      : await (async () => {
+          // No filter requested — pull more than the asked limit so we can
+          // drop drafts client-side and still return up to `limit` real rows.
+          const raw = await ctx.db
+            .query("bookings")
+            .order("desc")
+            .take(limit + 50);
+          return raw.filter((b) => b.status !== "pending").slice(0, limit);
+        })();
     return await Promise.all(
       rows.map(async (b) => {
         const service = await ctx.db.get(b.serviceId);
@@ -238,10 +279,9 @@ export const getInternal = internalQuery({
 });
 
 // INTERNAL: idempotent setter for refund state. Called both by the admin
-// refund action (immediately after Stripe accepts the request) AND by the
-// charge.refunded webhook (defense in depth + handles refunds initiated from
-// the Stripe dashboard). Uses the higher of {existing, incoming} totals so
-// out-of-order webhook deliveries don't roll back the state.
+// refund action (immediately after Moneris accepts the request) AND by the
+// Moneris notification webhook. Uses the higher of {existing, incoming}
+// totals so out-of-order webhook deliveries don't roll back the state.
 export const applyRefund = internalMutation({
   args: {
     bookingId: v.id("bookings"),
@@ -259,23 +299,10 @@ export const applyRefund = internalMutation({
   },
 });
 
-// INTERNAL: lookup by Stripe PaymentIntent — used by the charge.refunded
-// webhook to find which booking a refund applies to.
-export const getInternalByPaymentIntent = internalQuery({
-  args: { paymentIntentId: v.string() },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("bookings")
-      .withIndex("by_payment_intent", (q) =>
-        q.eq("stripePaymentIntentId", args.paymentIntentId),
-      )
-      .unique();
-  },
-});
-
-// ADMIN: issue a refund for a cancelled booking. amountCents is the amount
-// to refund (in cents), defaulting to the remaining unrefunded balance.
-// Throws if the booking isn't refundable or the amount exceeds the balance.
+// ADMIN: issue a refund for a booking. Defaults to the remaining unrefunded
+// balance; supports partial refunds. Hits Moneris first, then patches the
+// row only if Moneris accepted — never marks something refunded that wasn't
+// actually refunded by the processor.
 export const adminRefund = action({
   args: {
     bookingId: v.id("bookings"),
@@ -291,8 +318,8 @@ export const adminRefund = action({
       id: args.bookingId,
     });
     if (!booking) throw new Error("Booking not found");
-    if (!booking.stripePaymentIntentId) {
-      throw new Error("Booking has no Stripe payment intent — nothing to refund");
+    if (!booking.monerisTxnId || !booking.monerisOrderId) {
+      throw new Error("Booking has no Moneris transaction — nothing to refund");
     }
     if (booking.paymentStatus === "refunded") {
       throw new Error("Booking is already fully refunded");
@@ -308,25 +335,32 @@ export const adminRefund = action({
       throw new Error(`Refund amount must be between 1 and ${remaining} cents`);
     }
 
-    const refund = await ctx.runAction(internal.stripe.createRefundInternal, {
-      paymentIntentId: booking.stripePaymentIntentId,
+    // A "purchase correction" (zero-fee same-day void) is only valid when
+    // we're refunding the full original deposit AND no partial refund has
+    // already chipped at it. Anything else has to be a real refund.
+    const preferCorrection =
+      amount === booking.depositAmountCents && alreadyRefunded === 0;
+
+    const refund = await ctx.runAction(internal.moneris.createRefundInternal, {
+      monerisTxnId: booking.monerisTxnId,
+      orderNo: booking.monerisOrderId,
       amountCents: amount,
       reason: args.reason,
+      preferCorrection,
     });
 
     await ctx.runMutation(internal.bookings.applyRefund, {
       bookingId: args.bookingId,
-      totalRefundedCents: alreadyRefunded + refund.amountCents,
+      totalRefundedCents: alreadyRefunded + refund.refundedCents,
     });
 
-    return { ok: true, refundedCents: alreadyRefunded + refund.amountCents };
+    return { ok: true, refundedCents: alreadyRefunded + refund.refundedCents };
   },
 });
 
-// ADMIN: cancel a booking — calls Cal.com to cancel its calendar entry first
-// (so the customer gets the standard Cal.com cancellation email), then flips
-// our row's status. The Cal.com webhook will also fire BOOKING_CANCELLED but
-// markCancelled is idempotent, so the second update is a no-op.
+// ADMIN: cancel a booking — calls Cal.com to cancel its calendar entry first,
+// then flips our row's status. Cal.com webhook will also fire BOOKING_CANCELLED
+// but markCancelled is idempotent.
 export const adminCancel = action({
   args: {
     bookingId: v.id("bookings"),
@@ -349,12 +383,9 @@ export const adminCancel = action({
         reason: args.reason,
       });
     }
-    // Update local row directly too — the webhook will arrive eventually but
-    // we want the admin UI to reflect the change immediately.
     await ctx.runMutation(internal.bookings.markCancelled, {
       uid: booking.calComBookingId ?? "",
     });
-    // Fallback for bookings without a Cal.com uid (markCancelled keys by uid):
     if (!booking.calComBookingId) {
       await ctx.runMutation(internal.bookings.forceStatus, {
         bookingId: args.bookingId,
@@ -365,16 +396,11 @@ export const adminCancel = action({
   },
 });
 
-// INTERNAL: status setter that doesn't require a calcom uid lookup. Used as
-// a fallback in adminCancel when a booking has no Cal.com uid.
+// INTERNAL: status setter that doesn't require a calcom uid lookup.
 export const forceStatus = internalMutation({
   args: {
     bookingId: v.id("bookings"),
-    status: v.union(
-      v.literal("confirmed"),
-      v.literal("cancelled"),
-      v.literal("completed"),
-    ),
+    status: v.union(...STATUS_LITERALS),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.bookingId, { status: args.status });
@@ -384,14 +410,35 @@ export const forceStatus = internalMutation({
 export const updateStatus = mutation({
   args: {
     id: v.id("bookings"),
-    status: v.union(
-      v.literal("confirmed"),
-      v.literal("cancelled"),
-      v.literal("completed"),
-    ),
+    status: v.union(...STATUS_LITERALS),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     await ctx.db.patch(args.id, { status: args.status });
+  },
+});
+
+// INTERNAL: cron sweep — drop draft bookings (status=pending) older than 30
+// minutes. They represent customers who opened the Moneris iframe and
+// abandoned checkout; leaving them around clogs the pending list and gives
+// false impressions of held slots.
+export const cleanupAbandonedDrafts = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 30 * 60 * 1000;
+    let removed = 0;
+    while (true) {
+      const batch = await ctx.db
+        .query("bookings")
+        .withIndex("by_status", (q) => q.eq("status", "pending"))
+        .take(100);
+      const stale = batch.filter((b) => b.createdAt < cutoff);
+      for (const row of stale) {
+        await ctx.db.delete(row._id);
+        removed++;
+      }
+      if (stale.length < batch.length || batch.length < 100) break;
+    }
+    return { removed };
   },
 });

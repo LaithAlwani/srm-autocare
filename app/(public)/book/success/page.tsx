@@ -11,28 +11,22 @@ import { formatPriceFromCents, formatDateTime } from "@/lib/format";
 
 export default function BookSuccessPage() {
   const searchParams = useSearchParams();
-  // Stripe Elements appends `payment_intent` to the return_url after a
-  // successful confirmation. Older Checkout-based bookings used `session_id`
-  // — fall back to that for backward compat with any older links.
-  const paymentIntentId = searchParams.get("payment_intent");
-  const sessionId = searchParams.get("session_id");
+  // Moneris's payment_receipt callback is what brought us here — components/
+  // moneris-payment-form.tsx pushes us to /book/success?order_no=... after
+  // calling verifyAndConfirm. The booking row will already exist (created
+  // as a draft during preload, promoted to confirmed by verifyAndConfirm).
+  const orderNo = searchParams.get("order_no");
 
-  const bookingByPI = useQuery(
-    api.bookings.getByPaymentIntent,
-    paymentIntentId ? { paymentIntentId } : "skip",
+  const booking = useQuery(
+    api.bookings.getByMonerisOrder,
+    orderNo ? { orderNo } : "skip",
   );
-  const bookingBySession = useQuery(
-    api.bookings.getBySession,
-    !paymentIntentId && sessionId ? { stripeSessionId: sessionId } : "skip",
-  );
-  const booking = paymentIntentId ? bookingByPI : bookingBySession;
-  const hasIdentifier = Boolean(paymentIntentId || sessionId);
 
   return (
     <div>
       <section className="section-y">
         <Container className="max-w-2xl text-center">
-          {!hasIdentifier ? (
+          {!orderNo ? (
             <p className="text-foreground-muted">Missing payment reference — nothing to confirm.</p>
           ) : booking === undefined ? (
             <div className="flex flex-col items-center gap-4 text-foreground-muted">
@@ -41,7 +35,7 @@ export default function BookSuccessPage() {
             </div>
           ) : booking === null ? (
             <p className="text-foreground-muted">
-              We couldn't find that booking yet. Refresh in a few seconds — Stripe is still
+              We couldn't find that booking yet. Refresh in a few seconds — Moneris is still
               notifying us.
             </p>
           ) : (

@@ -1,143 +1,139 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { auth } from "./auth";
-import type { Id } from "./_generated/dataModel";
 
 const http = httpRouter();
 
 // Mounts /.well-known/openid-configuration, /api/auth/signin/*, etc.
 auth.addHttpRoutes(http);
 
-// Stripe webhook: only place that writes a confirmed booking. Reads booking
-// details from PaymentIntent metadata (set by stripe.createPaymentIntent),
-// places the slot in Cal.com, then inserts the row in Convex.
+// Moneris async notification — optional defense-in-depth handler. The happy
+// path is that the customer pays, the iframe fires `payment_receipt`, and
+// our verifyAndConfirm action in moneris.ts immediately confirms the
+// booking. This webhook catches:
 //
-// In the Stripe dashboard webhook, subscribe to: `payment_intent.succeeded`
-// (we no longer use Checkout Sessions, so checkout.session.completed is unused).
+//   - Customers who close the tab between Moneris approving and our verify
+//     call coming back (rare but possible). Notification arrives later and
+//     promotes the draft to confirmed via the same idempotent mutation.
+//   - Refunds initiated directly inside Moneris's Merchant Resource Center
+//     (admin Refund button updates the row synchronously; this catches the
+//     out-of-band case).
+//
+// Configure in MRC → Admin → Asynchronous Notifications:
+//   URL    https://<convex-site-url>/moneris/notification
+//   Method POST
+//   Secret stored as MONERIS_HMAC_KEY on the Convex deployment
+//
+// Moneris signs the body with HMAC-SHA1 and sends the digest in the
+// `X-Moneris-Signature` header.
 http.route({
-  path: "/stripe/webhook",
+  path: "/moneris/notification",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
-    const sig = req.headers.get("stripe-signature");
-    const secret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!sig || !secret) return new Response("Missing signature/secret", { status: 400 });
+    const secret = process.env.MONERIS_HMAC_KEY;
+    if (!secret) return new Response("Missing MONERIS_HMAC_KEY", { status: 500 });
 
-    const Stripe = (await import("stripe")).default;
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-      apiVersion: "2026-04-22.dahlia",
-    });
+    const sig = req.headers.get("x-moneris-signature");
+    if (!sig) return new Response("Missing signature", { status: 400 });
 
     const body = await req.text();
-    let event: import("stripe").Stripe.Event;
-    try {
-      event = await stripe.webhooks.constructEventAsync(body, sig, secret);
-    } catch (err) {
-      console.error("Stripe signature verification failed", err);
+    const expected = await hmacSha1Hex(secret, body);
+    if (!timingSafeEqual(expected, sig.toLowerCase())) {
       return new Response("Bad signature", { status: 400 });
     }
 
-    // Refund handler: catches refunds initiated from the Stripe dashboard
-    // (the admin Refund button updates our DB synchronously; this is for
-    // refunds done outside the app + as defense in depth). applyRefund is
-    // idempotent — safe to fire on every charge update.
-    if (event.type === "charge.refunded") {
-      const charge = event.data.object as import("stripe").Stripe.Charge;
-      const paymentIntentId =
-        typeof charge.payment_intent === "string"
-          ? charge.payment_intent
-          : (charge.payment_intent?.id ?? "");
-      if (!paymentIntentId) return new Response("no payment intent", { status: 200 });
+    type MonerisPayload = {
+      txn_type?: string; // "purchase" | "refund" | ...
+      order_no?: string;
+      transaction_no?: string;
+      original_transaction_no?: string;
+      response_code?: string;
+      amount?: string;
+    };
+    let event: MonerisPayload;
+    try {
+      event = JSON.parse(body) as MonerisPayload;
+    } catch {
+      return new Response("Bad JSON", { status: 400 });
+    }
 
-      const booking = await ctx.runQuery(internal.bookings.getInternalByPaymentIntent, {
-        paymentIntentId,
+    const code = Number(event.response_code ?? "999");
+    if (!Number.isFinite(code) || code > 49) {
+      // Moneris response codes 00-49 are approvals; ignore declines.
+      return new Response("ignored (declined)", { status: 200 });
+    }
+    const amountCents = Math.round(Number(event.amount ?? "0") * 100);
+
+    if (event.txn_type === "purchase") {
+      if (!event.order_no || !event.transaction_no) {
+        return new Response("bad purchase payload", { status: 400 });
+      }
+      // Idempotent — verifyAndConfirm has almost certainly already fired.
+      // confirmFromMoneris returns isNew=false in that case.
+      const result = await ctx.runMutation(internal.bookings.confirmFromMoneris, {
+        orderNo: event.order_no,
+        monerisTxnId: event.transaction_no,
+        amountCents,
+      });
+      // Webhook firing first (rare) means we still need to schedule Cal.com.
+      if (result.isNew) {
+        const data = await ctx.runQuery(internal.bookings.getForCalcomDispatch, {
+          bookingId: result.id,
+        });
+        if (data) {
+          const eventTypeId =
+            data.service?.calcomEventTypeId ?? Number(process.env.CALCOM_EVENT_TYPE_ID);
+          if (eventTypeId && Number.isFinite(eventTypeId)) {
+            try {
+              const calComBookingId: string = await ctx.runAction(
+                internal.calcom.createBookingInternal,
+                {
+                  eventTypeId,
+                  slotStartISO: new Date(data.booking.slotStart).toISOString(),
+                  customerName: data.booking.customerName,
+                  customerEmail: data.booking.customerEmail,
+                  customerPhone: data.booking.customerPhone,
+                  vehicleInfo: data.booking.vehicleInfo,
+                  notes: data.booking.notes,
+                },
+              );
+              await ctx.runMutation(internal.bookings.setCalcomBookingId, {
+                bookingId: result.id,
+                calComBookingId,
+              });
+            } catch (err) {
+              console.error("Cal.com booking failed from Moneris webhook", err);
+            }
+          }
+        }
+      }
+      return new Response("ok", { status: 200 });
+    }
+
+    if (event.txn_type === "refund") {
+      // Refunds reference the ORIGINAL purchase txn id — that's the one we
+      // saved on the booking row.
+      const originalTxn = event.original_transaction_no;
+      if (!originalTxn) return new Response("bad refund payload", { status: 400 });
+      const booking = await ctx.runQuery(internal.bookings.getInternalByMonerisTxn, {
+        monerisTxnId: originalTxn,
       });
       if (!booking) {
-        console.warn(`Refund webhook: no booking with payment intent ${paymentIntentId}`);
+        console.warn(`Refund webhook: no booking with moneris txn ${originalTxn}`);
         return new Response("ignored", { status: 200 });
       }
+      // Webhook payload is the amount of THIS refund, not the cumulative
+      // total. Add it to whatever's already recorded.
+      const newTotal = (booking.refundedAmountCents ?? 0) + amountCents;
       await ctx.runMutation(internal.bookings.applyRefund, {
         bookingId: booking._id,
-        totalRefundedCents: charge.amount_refunded,
+        totalRefundedCents: newTotal,
       });
       return new Response("ok", { status: 200 });
     }
 
-    if (event.type !== "payment_intent.succeeded") {
-      return new Response("ignored", { status: 200 });
-    }
-
-    const intent = event.data.object as import("stripe").Stripe.PaymentIntent;
-    const meta = intent.metadata ?? {};
-
-    const serviceId = meta.serviceId as Id<"services"> | undefined;
-    const slotStart = Number(meta.slotStart);
-    const slotEnd = Number(meta.slotEnd);
-    const depositCents = Number(meta.depositCents);
-    if (!serviceId || !Number.isFinite(slotStart) || !Number.isFinite(depositCents)) {
-      console.error("Webhook missing required metadata", meta);
-      return new Response("bad metadata", { status: 400 });
-    }
-
-    // 1) Insert the booking FIRST. Atomic on stripePaymentIntentId — Convex
-    //    serializes mutations on the same document, so two simultaneous
-    //    webhook deliveries will only get one `isNew: true` back. We use
-    //    that flag to gate the Cal.com call and prevent duplicate calendar
-    //    bookings / confirmation emails.
-    const { id: bookingId, isNew } = await ctx.runMutation(
-      internal.bookings.upsertFromWebhook,
-      {
-        stripePaymentIntentId: intent.id,
-        serviceId,
-        slotStart,
-        slotEnd,
-        customerName: meta.customerName ?? "",
-        customerEmail: meta.customerEmail ?? "",
-        customerPhone: meta.customerPhone ?? "",
-        vehicleInfo: meta.vehicleInfo ?? "",
-        notes: meta.notes || undefined,
-        depositAmountCents: depositCents,
-      },
-    );
-
-    if (!isNew) {
-      // Stripe replay / parallel delivery — booking already exists, do nothing.
-      return new Response("already processed", { status: 200 });
-    }
-
-    // 2) Only the first webhook to insert reaches here — safe to call Cal.com.
-    //    If Cal.com fails, the booking still exists (admin will see it without
-    //    a calComBookingId and can manually reconcile).
-    try {
-      const service = await ctx.runQuery(api.services.get, { id: serviceId });
-      const eventTypeId = service?.calcomEventTypeId ?? Number(process.env.CALCOM_EVENT_TYPE_ID);
-      if (eventTypeId && Number.isFinite(eventTypeId)) {
-        const calComBookingId: string = await ctx.runAction(
-          internal.calcom.createBookingInternal,
-          {
-            eventTypeId,
-            slotStartISO: new Date(slotStart).toISOString(),
-            customerName: meta.customerName ?? "",
-            customerEmail: meta.customerEmail ?? "",
-            customerPhone: meta.customerPhone ?? "",
-            vehicleInfo: meta.vehicleInfo ?? "",
-            notes: meta.notes || undefined,
-          },
-        );
-        await ctx.runMutation(internal.bookings.setCalcomBookingId, {
-          bookingId,
-          calComBookingId,
-        });
-      } else {
-        console.error(
-          `No Cal.com event type configured for service ${serviceId} — booking saved without calendar entry`,
-        );
-      }
-    } catch (err) {
-      console.error("Cal.com booking failed (booking will still be saved)", err);
-    }
-
-    return new Response("ok", { status: 200 });
+    return new Response("ignored", { status: 200 });
   }),
 });
 
@@ -198,8 +194,6 @@ http.route({
         slotStart: start,
         slotEnd: end,
       });
-      // Cal.com sends customer + host emails for the reschedule itself —
-      // we don't fire any additional notification.
       return new Response("ok", { status: 200 });
     }
 
@@ -222,6 +216,22 @@ async function hmacSha256Hex(secret: string, body: string): Promise<string> {
     "raw",
     encoder.encode(secret),
     { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const buf = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// HMAC-SHA1 — Moneris's notification signature uses SHA1 (legacy).
+async function hmacSha1Hex(secret: string, body: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-1" },
     false,
     ["sign"],
   );

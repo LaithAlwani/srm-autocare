@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { Loader2, Mail } from "lucide-react";
+import { AlertTriangle, Loader2, LogOut, Mail } from "lucide-react";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
@@ -12,13 +12,23 @@ import { siteConfig } from "@/config/site";
 type Stage = "email" | "code";
 
 export default function AdminLoginPage() {
-  const { signIn } = useAuthActions();
+  const { signIn, signOut } = useAuthActions();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // `?denied=1` is set by the server-side layout guard when a signed-in user
+  // without owner/admin role tries to reach /admin/*. We surface a clear
+  // message + a one-click sign-out so they can try a different email.
+  const denied = searchParams.get("denied") === "1";
   const [stage, setStage] = useState<Stage>("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function handleSignOutAndRetry() {
+    await signOut();
+    router.replace("/admin/login");
+  }
 
   async function handleSendCode(e: React.FormEvent) {
     e.preventDefault();
@@ -57,6 +67,26 @@ export default function AdminLoginPage() {
           <p className="text-body-md text-foreground-muted mb-8">
             Sign in with your admin email. We'll send you a one-time code.
           </p>
+
+          {denied && (
+            <div className="mb-6 p-4 border border-error/30 bg-error/10 text-error">
+              <div className="flex items-start gap-3 mb-3">
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+                <p className="text-body-md">
+                  This account doesn't have admin access. Sign in with a different email or contact
+                  the owner to request access.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSignOutAndRetry}
+                className="text-error border-error/40 hover:bg-error/15"
+              >
+                <LogOut size={12} /> Sign out and try a different email
+              </Button>
+            </div>
+          )}
 
           {stage === "email" ? (
             <form onSubmit={handleSendCode} className="space-y-6">
