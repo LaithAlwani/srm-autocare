@@ -4,7 +4,7 @@
 // instead — this file is for fixed brand assets that ship with the code.
 
 export const siteConfig = {
-  name: "SRM Auto Care",
+  name: "Auto Care",
   shortName: "SRM",
   tagline: "Precision Detailing. Showroom Finish.",
   description:

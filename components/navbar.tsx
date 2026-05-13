@@ -14,10 +14,22 @@ export function Navbar() {
   return (
     <header className="sticky top-0 z-50 w-full bg-surface/85 backdrop-blur-md border-b border-border">
       <div className="container-stitch py-4 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-3">
-          <Image src="/logo.png" alt={siteConfig.name} width={36} height={36} priority />
-          <span className="font-display text-headline-md font-extrabold tracking-tighter uppercase text-foreground">
-            {siteConfig.name}
+        <Link
+          href="/"
+          aria-label={siteConfig.name}
+          className="inline-flex flex-col items-end leading-none"
+        >
+          <Image
+            src="/logo.png"
+            alt={siteConfig.name}
+            width={108}
+            height={108}
+            priority
+          />
+          {/* Tagline tucked under the right edge of the logo. Small label-tech
+              style so the logo stays the dominant element. */}
+          <span className="-mt-3 -mr-8 text-label-tech text-foreground-muted">
+            auto care
           </span>
         </Link>
 
