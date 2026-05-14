@@ -110,7 +110,7 @@ export default function AdminBookingsPage() {
             onClick={() => setFilter(f)}
             className={`text-label-tech px-4 py-2 border transition-colors ${
               filter === f
-                ? "bg-primary text-on-primary border-primary"
+                ? "bg-primary-strong text-on-primary border-primary-strong"
                 : "border-border text-foreground-muted hover:text-foreground hover:border-chrome"
             }`}
           >

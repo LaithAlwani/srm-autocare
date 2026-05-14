@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import { motion } from "framer-motion";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Container } from "@/components/ui/container";
@@ -72,14 +71,10 @@ export default function GalleryPage() {
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
               {standalones.map((item, i) => (
-                <motion.div
+                <div
                   key={item._id}
-                  className="gloss-card relative aspect-square overflow-hidden group"
-                  initial={{ opacity: 0, scale: 0.96 }}
-                  whileInView={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: Math.min(i * 0.04, 0.3) }}
-                  viewport={{ once: true, margin: "-50px" }}
-                  whileHover={{ scale: 1.02 }}
+                  className="gloss-card relative aspect-square overflow-hidden group animate-slide-up hover:scale-[1.02] transition-transform"
+                  style={{ animationDelay: `${Math.min(i * 40, 300)}ms` }}
                 >
                   {item.imageUrl && (
                     <Image
@@ -95,7 +90,7 @@ export default function GalleryPage() {
                       <p className="text-label-tech text-foreground">{item.caption}</p>
                     </div>
                   )}
-                </motion.div>
+                </div>
               ))}
             </div>
           )}

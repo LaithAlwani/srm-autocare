@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import { motion } from "framer-motion";
 import { useQuery } from "convex/react";
 import { ArrowRight, Clock } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -51,13 +50,10 @@ export default function ServicesPage() {
               {services.map((s, idx) => {
                 const Icon = resolveIcon(s.icon);
                 return (
-                  <motion.article
+                  <article
                     key={s._id}
-                    className="gloss-card relative overflow-hidden flex flex-col"
-                    initial={{ opacity: 0, y: 16 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    transition={{ delay: Math.min(idx * 0.06, 0.3) }}
-                    viewport={{ once: true, margin: "-100px" }}
+                    className="gloss-card relative overflow-hidden flex flex-col animate-slide-up"
+                    style={{ animationDelay: `${Math.min(idx * 60, 300)}ms` }}
                   >
                     {s.imageUrl && (
                       <div className="absolute inset-0 opacity-15 group-hover:opacity-25 transition-opacity">
@@ -114,7 +110,7 @@ export default function ServicesPage() {
                         </ButtonLink>
                       </div>
                     </div>
-                  </motion.article>
+                  </article>
                 );
               })}
             </div>

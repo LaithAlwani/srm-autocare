@@ -3,7 +3,6 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { Menu, X } from "lucide-react";
 import { siteConfig } from "@/config/site";
 import { ButtonLink } from "@/components/ui/button";
@@ -57,33 +56,35 @@ export function Navbar() {
         </button>
       </div>
 
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="md:hidden overflow-hidden border-t border-border"
-          >
-            <div className="container-stitch py-6 flex flex-col gap-4">
-              {siteConfig.nav.map((item) => (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  onClick={() => setOpen(false)}
-                  className="text-label-tech text-foreground-muted hover:text-foreground py-2 transition-colors"
-                >
-                  {item.label}
-                </Link>
-              ))}
-              <ButtonLink href="/book" variant="primary" size="md" block>
-                Book Now
-              </ButtonLink>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Mobile dropdown nav. Always mounted so CSS can transition both
+          directions; `grid-template-rows: 0fr ↔ 1fr` is the modern lock-free
+          recipe for "transition to auto height" without measuring at runtime. */}
+      <div
+        className={`md:hidden grid border-t border-border overflow-hidden transition-[grid-template-rows,opacity] duration-200 ease-out ${
+          open
+            ? "grid-rows-[1fr] opacity-100 border-border"
+            : "grid-rows-[0fr] opacity-0 border-transparent"
+        }`}
+        aria-hidden={!open}
+      >
+        <div className="min-h-0">
+          <div className="container-stitch py-6 flex flex-col gap-4">
+            {siteConfig.nav.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setOpen(false)}
+                className="text-label-tech text-foreground-muted hover:text-foreground py-2 transition-colors"
+              >
+                {item.label}
+              </Link>
+            ))}
+            <ButtonLink href="/book" variant="primary" size="md" block>
+              Book Now
+            </ButtonLink>
+          </div>
+        </div>
+      </div>
     </header>
   );
 }

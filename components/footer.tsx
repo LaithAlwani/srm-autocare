@@ -24,7 +24,7 @@ export function Footer() {
 
         {/* Navigation */}
         <div>
-          <h5 className="text-label-tech text-primary mb-6">Navigation</h5>
+          <h2 className="text-label-tech text-primary mb-6">Navigation</h2>
           <ul className="space-y-4">
             {siteConfig.footerNav.navigation.map((link) => (
               <li key={link.href}>
@@ -41,7 +41,7 @@ export function Footer() {
 
         {/* Contact */}
         <div>
-          <h5 className="text-label-tech text-primary mb-6">Contact</h5>
+          <h2 className="text-label-tech text-primary mb-6">Contact</h2>
           <ul className="space-y-4 text-body-md text-foreground-muted">
             <li className="flex items-start gap-3">
               <Phone size={16} className="mt-1 shrink-0" />
@@ -76,7 +76,7 @@ export function Footer() {
 
         {/* Connect */}
         <div>
-          <h5 className="text-label-tech text-primary mb-6">Connect</h5>
+          <h2 className="text-label-tech text-primary mb-6">Connect</h2>
           <div className="flex gap-3">
             <a
               href={siteConfig.social.instagram}

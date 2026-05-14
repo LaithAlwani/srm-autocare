@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { formatPriceFromCents } from "@/lib/format";
+import { useModalTransition } from "@/lib/use-modal-transition";
 
 // Editable-amount refund modal. Defaults to the full remaining balance but
 // lets the admin issue a partial refund instead. Submits in dollars; we
@@ -25,6 +26,7 @@ export function RefundModal({
   onClose: () => void;
 }) {
   const adminRefund = useAction(api.bookings.adminRefund);
+  const { shown, handleClose } = useModalTransition(onClose);
 
   const remainingCents = depositAmountCents - alreadyRefundedCents;
   const [dollars, setDollars] = useState<number>(remainingCents / 100);
@@ -34,11 +36,11 @@ export function RefundModal({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !submitting) onClose();
+      if (e.key === "Escape" && !submitting) handleClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [submitting, onClose]);
+  }, [submitting, handleClose]);
 
   const cents = Math.round(dollars * 100);
   const valid = cents > 0 && cents <= remainingCents;
@@ -54,7 +56,7 @@ export function RefundModal({
         amountCents: cents,
         reason: reason.trim() || undefined,
       });
-      onClose();
+      handleClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refund failed.");
       setSubmitting(false);
@@ -66,11 +68,15 @@ export function RefundModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="refund-modal-title"
-      className="fixed inset-0 z-50 bg-surface/80 backdrop-blur flex items-center justify-center p-4"
-      onClick={() => !submitting && onClose()}
+      className={`fixed inset-0 z-50 bg-surface/80 backdrop-blur flex items-center justify-center p-4 transition-opacity duration-200 ${
+        shown ? "opacity-100" : "opacity-0"
+      }`}
+      onClick={() => !submitting && handleClose()}
     >
       <div
-        className="gloss-card bg-surface-container w-full max-w-md"
+        className={`gloss-card bg-surface-container w-full max-w-md transition-all duration-200 ${
+          shown ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4 p-6 border-b border-border">
@@ -86,7 +92,7 @@ export function RefundModal({
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={submitting}
             className="text-foreground-muted hover:text-foreground disabled:opacity-40"
             aria-label="Close"
@@ -175,7 +181,7 @@ export function RefundModal({
         </div>
 
         <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end p-6 border-t border-border">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={submitting}>
+          <Button variant="ghost" size="md" onClick={handleClose} disabled={submitting}>
             Cancel
           </Button>
           <Button

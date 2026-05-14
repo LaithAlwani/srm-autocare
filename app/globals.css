@@ -16,8 +16,18 @@
   --color-surface-container-highest: #353534;
   --color-surface-bright: #393939;
 
-  /* ---- Brand ---- */
-  --color-primary: #007aff;
+  /* ---- Brand ----
+   * `--color-primary` is the brand blue used wherever blue sits on a DARK
+   * surface — eyebrows, accent text, active states, icons. Slightly brighter
+   * than the historical #007aff so it passes WCAG AA (≥ 4.5) against all
+   * dark surfaces (#131313 → #1c1b1b).
+   *
+   * `--color-primary-strong` is a darker blue used wherever WHITE text sits
+   * on a blue BACKGROUND — primary buttons, active step pills, etc. Pure
+   * #007aff is too bright for white-on-blue to pass 4.5; this gives ~5.5:1.
+   */
+  --color-primary: #1e88ff;
+  --color-primary-strong: #0061cc;
   --color-primary-hover: #3393ff;
   --color-primary-muted: #adc6ff;
   --color-primary-container: #4b8eff;

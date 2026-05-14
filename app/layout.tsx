@@ -51,6 +51,21 @@ export default function RootLayout({
         lang="en"
         className={`dark ${hanken.variable} ${inter.variable} ${jetbrains.variable}`}
       >
+        <head>
+          {/* Resource hints — open the network connection to third-party
+              origins as early as possible so subsequent fetches don't block
+              on TCP/TLS handshake. The Convex client kicks off queries from
+              the very first render, so warming it up costs nothing. */}
+          {process.env.NEXT_PUBLIC_CONVEX_URL && (
+            <link
+              rel="preconnect"
+              href={process.env.NEXT_PUBLIC_CONVEX_URL}
+              crossOrigin="anonymous"
+            />
+          )}
+          <link rel="dns-prefetch" href="https://gatewayt.moneris.com" />
+          <link rel="dns-prefetch" href="https://api.cal.com" />
+        </head>
         <body className="min-h-screen flex flex-col bg-surface text-foreground antialiased">
           <Providers>{children}</Providers>
         </body>

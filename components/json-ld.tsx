@@ -9,11 +9,11 @@ import { siteConfig } from "@/config/site";
 // Lives in the public layout so every marketing page carries the same
 // business graph — the admin section is intentionally excluded.
 
-// Approximate coordinates for 1645 Comstock Rd, Gloucester, ON. Refine via
-// Google Maps if you ever want pin-point accuracy; Google geocodes the
-// postal address as a fallback either way.
-const GEO_LAT = 45.4055;
-const GEO_LNG = -75.5722;
+// Precise coordinates for 1645 Comstock Rd, Gloucester, ON — pin-pointed
+// from Google Maps. Used in the GeoCoordinates schema below so Google's
+// local pack and Maps integration can place the business exactly.
+const GEO_LAT = 45.41809402496926;
+const GEO_LNG = -75.62036504417831;
 
 // Map our friendly day labels to schema.org's day URIs.
 const DAY_URI: Record<string, string> = {

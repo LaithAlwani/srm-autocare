@@ -1,7 +1,6 @@
 "use client";
 
 import Image from "next/image";
-import { motion } from "framer-motion";
 import { Award, Target, Users } from "lucide-react";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
@@ -87,18 +86,15 @@ export default function AboutPage() {
           <h2 className="text-headline-lg uppercase mb-12 text-center">Core values</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             {VALUES.map((v, i) => (
-              <motion.div
+              <div
                 key={v.title}
-                className="gloss-card p-10 text-center"
-                initial={{ opacity: 0, y: 12 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.1 }}
-                viewport={{ once: true }}
+                className="gloss-card p-10 text-center animate-slide-up"
+                style={{ animationDelay: `${i * 100}ms` }}
               >
                 <v.icon className="text-primary mx-auto mb-6" size={36} strokeWidth={1.5} />
                 <h3 className="text-headline-md uppercase mb-3">{v.title}</h3>
                 <p className="text-body-md text-foreground-muted">{v.body}</p>
-              </motion.div>
+              </div>
             ))}
           </div>
         </Container>

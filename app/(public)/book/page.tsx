@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAction, useQuery } from "convex/react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowLeft,
   ArrowRight,
@@ -231,7 +230,7 @@ export default function BookPage() {
                         <span
                           className={`w-8 h-8 flex items-center justify-center border ${
                             active
-                              ? "border-primary bg-primary text-on-primary glow-blue"
+                              ? "border-primary-strong bg-primary-strong text-on-primary glow-blue"
                               : done
                                 ? "border-primary text-primary"
                                 : "border-border text-foreground-muted"
@@ -251,14 +250,14 @@ export default function BookPage() {
             );
           })()}
 
-          <AnimatePresence mode="wait">
+          {/* Each step has a unique `key` so React remounts on step change,
+              which re-triggers the CSS slide-up animation. No exit animation —
+              the new step just appears in place of the old, which matches the
+              feel of AnimatePresence's `mode="wait"` closely enough that most
+              users won't notice the difference. */}
+          <div>
             {step === 0 && (
-              <motion.div
-                key="step-0"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-              >
+              <div key="step-0" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Choose a service</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {services === undefined ? (
@@ -315,16 +314,11 @@ export default function BookPage() {
                     <ArrowRight size={14} />
                   </Button>
                 </div>
-              </motion.div>
+              </div>
             )}
 
             {step === 1 && selectedService && (
-              <motion.div
-                key="step-1"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-              >
+              <div key="step-1" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Pick a time</h2>
                 <div className="gloss-card p-4 md:p-6 mb-8 flex flex-col md:flex-row md:items-center gap-4">
                   <DatePicker
@@ -385,16 +379,11 @@ export default function BookPage() {
                     <ArrowRight size={14} />
                   </Button>
                 </div>
-              </motion.div>
+              </div>
             )}
 
             {step === 2 && selectedService && slotStartISO && (
-              <motion.div
-                key="step-2"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-              >
+              <div key="step-2" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Your details</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2 gloss-card p-8 space-y-6">
@@ -516,16 +505,11 @@ export default function BookPage() {
                     <ArrowLeft size={14} /> Back
                   </Button>
                 </div>
-              </motion.div>
+              </div>
             )}
 
             {step === 3 && selectedService && slotStartISO && paymentSession && (
-              <motion.div
-                key="step-3"
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-              >
+              <div key="step-3" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Payment</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2">
@@ -579,9 +563,9 @@ export default function BookPage() {
                     <ArrowLeft size={14} /> Back
                   </Button>
                 </div>
-              </motion.div>
+              </div>
             )}
-          </AnimatePresence>
+          </div>
         </Container>
       </section>
     </div>

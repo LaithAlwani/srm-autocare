@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/lib/format";
+import { useModalTransition } from "@/lib/use-modal-transition";
 
 // Inline modal launched from a row in /admin/bookings. Shows a date + slot
 // picker scoped to the booking's service, then calls bookings.adminReschedule.
@@ -29,6 +30,7 @@ export function RescheduleModal({
 }) {
   const listSlots = useAction(api.calcom.listSlots);
   const adminReschedule = useAction(api.bookings.adminReschedule);
+  const { shown, handleClose } = useModalTransition(onClose);
 
   const [date, setDate] = useState<string>(() => {
     const d = new Date();
@@ -64,7 +66,7 @@ export function RescheduleModal({
         slotStartISO: selected,
         reason: reason.trim() || undefined,
       });
-      onClose();
+      handleClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not reschedule");
       setSubmitting(false);
@@ -75,11 +77,15 @@ export function RescheduleModal({
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 bg-surface/80 backdrop-blur flex items-center justify-center p-4"
-      onClick={onClose}
+      className={`fixed inset-0 z-50 bg-surface/80 backdrop-blur flex items-center justify-center p-4 transition-opacity duration-200 ${
+        shown ? "opacity-100" : "opacity-0"
+      }`}
+      onClick={() => !submitting && handleClose()}
     >
       <div
-        className="gloss-card bg-surface-container w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+        className={`gloss-card bg-surface-container w-full max-w-2xl max-h-[90vh] overflow-y-auto transition-all duration-200 ${
+          shown ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-6 border-b border-border">
@@ -90,8 +96,9 @@ export function RescheduleModal({
             </p>
           </div>
           <button
-            onClick={onClose}
-            className="text-foreground-muted hover:text-foreground"
+            onClick={handleClose}
+            disabled={submitting}
+            className="text-foreground-muted hover:text-foreground disabled:opacity-40"
             aria-label="Close"
           >
             <X size={20} />
@@ -176,7 +183,7 @@ export function RescheduleModal({
         </div>
 
         <div className="flex gap-2 justify-end p-6 border-t border-border">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={submitting}>
+          <Button variant="ghost" size="md" onClick={handleClose} disabled={submitting}>
             Cancel
           </Button>
           <Button

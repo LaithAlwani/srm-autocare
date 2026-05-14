@@ -17,7 +17,8 @@ export const colors = {
   surfaceBright: "#393939",
 
   // Brand
-  primary: "#007aff",
+  primary: "#1e88ff",          // text accent on dark surfaces (≥ 4.5 contrast on every dark surface token)
+  primaryStrong: "#0061cc",    // backgrounds where white text sits (buttons, active pills)
   primaryHover: "#3393ff",
   primaryMuted: "#adc6ff",
   primaryContainer: "#4b8eff",

@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { motion } from "framer-motion";
 import { useQuery } from "convex/react";
 import { ChevronDown } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -53,38 +52,55 @@ export default function HomePage() {
 
   return (
     <div>
+      {/*
+        Resource hint: tell the browser to start fetching the hero video at
+        the highest priority before it discovers the <video> tag inside
+        <HeroMedia>. Cuts LCP because the video file download begins during
+        HTML parse instead of after React hydration. React 19 hoists `<link>`
+        elements rendered inside components into <head> automatically.
+      */}
+      <link
+        rel="preload"
+        as="video"
+        href={heroMedia.homeHeroVideo}
+        type="video/mp4"
+        fetchPriority="high"
+      />
+
       {/* HERO */}
       <section className="relative h-[88vh] min-h-[600px] flex items-center justify-center overflow-hidden">
-        <HeroMedia kind="video" src={heroMedia.homeHeroVideo} dim={45} />
+        <HeroMedia
+          kind="video"
+          src={heroMedia.homeHeroVideo}
+          alt="Detailing footage of a luxury vehicle being polished and ceramic-coated in the SRM Auto Care studio"
+          dim={45}
+          priority
+        />
+        {/*
+          Hero entrance is now pure CSS (`animate-slide-up` keyframes from
+          globals.css) with staggered `animation-delay` per element. Saves
+          ~120 KB of framer-motion JS off the LCP path. The `both` fill mode
+          on the keyframe keeps elements invisible until their delay elapses.
+        */}
         <Container className="relative z-10 text-center">
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-          >
+          <div className="animate-slide-up" style={{ animationDelay: "0ms" }}>
             <Eyebrow className="tracking-[0.3em] mb-4">{hero.eyebrow}</Eyebrow>
-          </motion.div>
-          <motion.h1
-            className="text-display text-foreground mb-8 tracking-tighter uppercase max-w-4xl mx-auto"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.7, delay: 0.1 }}
+          </div>
+          <h1
+            className="animate-slide-up text-display text-foreground mb-8 tracking-tighter uppercase max-w-4xl mx-auto"
+            style={{ animationDelay: "100ms" }}
           >
             {hero.headline}
-          </motion.h1>
-          <motion.p
-            className="text-body-lg text-foreground-muted max-w-2xl mx-auto mb-12"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.7, delay: 0.2 }}
+          </h1>
+          <p
+            className="animate-slide-up text-body-lg text-foreground-muted max-w-2xl mx-auto mb-12"
+            style={{ animationDelay: "200ms" }}
           >
             {hero.subhead}
-          </motion.p>
-          <motion.div
-            className="flex flex-col md:flex-row gap-4 justify-center"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.7, delay: 0.3 }}
+          </p>
+          <div
+            className="animate-slide-up flex flex-col md:flex-row gap-4 justify-center"
+            style={{ animationDelay: "300ms" }}
           >
             <ButtonLink href="/book" variant="primary" size="lg">
               Book Your Session
@@ -92,15 +108,11 @@ export default function HomePage() {
             <ButtonLink href="/gallery" variant="secondary" size="lg">
               View Gallery
             </ButtonLink>
-          </motion.div>
+          </div>
         </Container>
-        <motion.div
-          className="absolute bottom-10 left-1/2 -translate-x-1/2 text-primary"
-          animate={{ y: [0, 8, 0] }}
-          transition={{ duration: 2, repeat: Infinity }}
-        >
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 text-primary animate-bounce">
           <ChevronDown size={28} />
-        </motion.div>
+        </div>
       </section>
 
       {/* SERVICES PREVIEW (Bento) */}
@@ -180,26 +192,23 @@ export default function HomePage() {
           <div className="grid grid-cols-1 md:grid-cols-4 gap-2 relative">
             <div className="hidden md:block absolute top-[44px] left-0 w-full h-px bg-border z-0" />
             {processSteps.map((step, i) => (
-              <motion.div
+              <div
                 key={step.number}
-                className="relative z-10 text-center p-6"
-                initial={{ opacity: 0, y: 12 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.08 }}
-                viewport={{ once: true, margin: "-50px" }}
+                className="relative z-10 text-center p-6 animate-slide-up"
+                style={{ animationDelay: `${i * 80}ms` }}
               >
                 <div
                   className={`w-12 h-12 mx-auto mb-6 flex items-center justify-center text-label-tech border ${
                     i === processSteps.length - 1
-                      ? "bg-primary text-on-primary border-primary"
+                      ? "bg-primary-strong text-on-primary border-primary-strong"
                       : "bg-surface text-primary border-primary"
                   }`}
                 >
                   {step.number}
                 </div>
-                <h4 className="text-headline-md uppercase mb-4">{step.title}</h4>
+                <h3 className="text-headline-md uppercase mb-4">{step.title}</h3>
                 <p className="text-body-md text-foreground-muted">{step.body}</p>
-              </motion.div>
+              </div>
             ))}
           </div>
         </Container>
@@ -261,14 +270,25 @@ export default function HomePage() {
 
       {/* CTA */}
       <section className="relative section-y text-on-primary overflow-hidden" id="booking">
-        <HeroMedia kind="video" src={heroMedia.homeCtaVideo} dim={20} tint="primary" />
+        <HeroMedia
+          kind="video"
+          src={heroMedia.homeCtaVideo}
+          alt="Mirror-finish car paint reflecting workshop lights after a complete detail"
+          dim={20}
+          tint="primary"
+        />
         <Container className="relative z-10 text-center max-w-4xl">
           <h2 className="text-display uppercase mb-8 tracking-tighter">Restore the gloss</h2>
           <p className="text-body-lg text-on-primary/80 mb-12 uppercase tracking-widest font-bold">
             Limited monthly slots available for bespoke detailing.
           </p>
           <div className="flex flex-col md:flex-row gap-4 justify-center items-center">
-            <ButtonLink href="/book" variant="secondary" size="lg" className="bg-on-primary text-primary border-on-primary hover:bg-on-primary/90">
+            <ButtonLink
+              href="/book"
+              variant="secondary"
+              size="lg"
+              className="bg-on-primary text-primary-strong border-on-primary hover:bg-on-primary/90"
+            >
               Book Your Session
             </ButtonLink>
             <a

@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { AnimatePresence, motion } from "framer-motion";
 import {
   CalendarCheck,
   Image as ImageIcon,
@@ -175,45 +174,35 @@ export function AdminShell({ children }: { children: ReactNode }) {
         {sidebarBody}
       </aside>
 
-      {/* Mobile drawer + scrim. */}
-      <AnimatePresence>
-        {mobileOpen && (
-          <>
-            <motion.div
-              key="scrim"
-              className="fixed inset-0 z-40 bg-surface/70 backdrop-blur md:hidden"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              onClick={() => setMobileOpen(false)}
-              aria-hidden="true"
-            />
-            <motion.aside
-              id="admin-mobile-drawer"
-              key="drawer"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Admin navigation"
-              className="fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-surface-container-lowest border-r border-border md:hidden flex flex-col"
-              initial={{ x: "-100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "-100%" }}
-              transition={{ type: "tween", duration: 0.25, ease: "easeOut" }}
-            >
-              <button
-                type="button"
-                onClick={() => setMobileOpen(false)}
-                aria-label="Close menu"
-                className="absolute top-4 right-4 w-9 h-9 flex items-center justify-center text-foreground-muted hover:text-foreground"
-              >
-                <X size={18} />
-              </button>
-              {sidebarBody}
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
+      {/* Mobile drawer + scrim. Always mounted so CSS can transition both
+          directions cleanly (no JS mount/unmount choreography needed). */}
+      <div
+        className={`fixed inset-0 z-40 bg-surface/70 backdrop-blur md:hidden transition-opacity duration-200 ${
+          mobileOpen ? "opacity-100" : "opacity-0 pointer-events-none"
+        }`}
+        onClick={() => setMobileOpen(false)}
+        aria-hidden="true"
+      />
+      <aside
+        id="admin-mobile-drawer"
+        role="dialog"
+        aria-modal={mobileOpen ? true : undefined}
+        aria-hidden={!mobileOpen}
+        aria-label="Admin navigation"
+        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-surface-container-lowest border-r border-border md:hidden flex flex-col transition-transform duration-250 ease-out ${
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close menu"
+          className="absolute top-4 right-4 w-9 h-9 flex items-center justify-center text-foreground-muted hover:text-foreground"
+        >
+          <X size={18} />
+        </button>
+        {sidebarBody}
+      </aside>
 
       {/* Content */}
       <main className="p-6 md:p-12 overflow-y-auto">{children}</main>

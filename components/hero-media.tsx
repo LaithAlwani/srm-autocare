@@ -15,6 +15,13 @@ type Common = {
   dim?: number;
   /** Tint color for an additional overlay (e.g. "primary" for the CTA). */
   tint?: "none" | "primary";
+  /**
+   * Mark this hero as the page's LCP (largest contentful paint) element.
+   * Tells the browser to fetch it with high network priority, skips lazy
+   * loading, and (for video) preloads the full file instead of just metadata.
+   * Set on EXACTLY ONE hero per page — typically the one above the fold.
+   */
+  priority?: boolean;
 };
 
 type ImageProps = Common & {
@@ -28,11 +35,18 @@ type VideoProps = Common & {
   src: string;
   /** Optional first-frame poster (jpg/webp) shown before the video loads. */
   poster?: string;
+  /**
+   * Accessible description of the footage. Surfaced as aria-label on the
+   * <video> element. <video> has no `alt` attribute, so this is the canonical
+   * way to expose its content to assistive tech.
+   */
+  alt?: string;
 };
 
 export function HeroMedia(props: ImageProps | VideoProps) {
   const dim = props.dim ?? 55;
   const tint = props.tint ?? "none";
+  const priority = props.priority ?? false;
 
   return (
     <div className={clsx("absolute inset-0 overflow-hidden", props.className)}>
@@ -41,7 +55,11 @@ export function HeroMedia(props: ImageProps | VideoProps) {
           src={props.src}
           alt={props.alt ?? ""}
           fill
-          priority
+          // `priority` already disables lazy loading and bumps Next/Image's
+          // internal fetch priority. We also stamp fetchPriority for browsers
+          // that read it directly off the rendered <img>.
+          priority={priority}
+          fetchPriority={priority ? "high" : "auto"}
           sizes="100vw"
           className="object-cover"
         />
@@ -53,9 +71,18 @@ export function HeroMedia(props: ImageProps | VideoProps) {
           muted
           loop
           playsInline
-          preload="metadata"
+          // For the LCP hero we preload the full file so the first frames
+          // can paint ASAP. For non-LCP heroes "metadata" keeps initial
+          // payload small.
+          preload={priority ? "auto" : "metadata"}
           poster={props.poster}
+          aria-label={props.alt}
+          aria-hidden={props.alt ? undefined : true}
           className="w-full h-full object-cover"
+          // fetchPriority isn't typed on <video> in @types/react yet, but the
+          // HTML attribute is honored by Chromium-based browsers and falls
+          // back gracefully elsewhere. Spread via cast keeps the intent clear.
+          {...({ fetchPriority: priority ? "high" : "auto" } as { fetchPriority: "high" | "auto" })}
         >
           <source src={props.src} type="video/mp4" />
         </video>
