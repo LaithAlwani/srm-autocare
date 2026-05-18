@@ -10,6 +10,7 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { HeroMedia } from "@/components/hero-media";
 import { heroMedia } from "@/config/media";
 import { resolveIcon } from "@/lib/icons";
+import { ServiceDescription } from "@/components/ui/service-description";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 
 export default function ServicesPage() {
@@ -84,7 +85,7 @@ export default function ServicesPage() {
 
                       <div>
                         <h3 className="text-headline-lg uppercase mb-3">{s.name}</h3>
-                        <p className="text-body-md text-foreground-muted mb-6">{s.description}</p>
+                        <ServiceDescription text={s.description} className="mb-6" />
                       </div>
 
                       <div className="mt-auto flex items-center justify-between border-t border-border pt-6">

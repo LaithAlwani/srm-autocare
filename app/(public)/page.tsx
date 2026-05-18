@@ -9,6 +9,7 @@ import { Container } from "@/components/ui/container";
 import { ButtonLink } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { resolveIcon } from "@/lib/icons";
+import { ServiceDescription } from "@/components/ui/service-description";
 import { siteConfig } from "@/config/site";
 import { heroMedia } from "@/config/media";
 import { HeroMedia } from "@/components/hero-media";
@@ -146,7 +147,7 @@ export default function HomePage() {
                   <Link
                     key={s._id}
                     href="/services"
-                    className={`${span} gloss-card group relative overflow-hidden h-[360px] block`}
+                    className={`${span} gloss-card group relative overflow-hidden min-h-[360px] block`}
                   >
                     {s.imageUrl && (
                       <div className="absolute inset-0 opacity-25 group-hover:opacity-45 transition-opacity">
@@ -159,7 +160,7 @@ export default function HomePage() {
                         />
                       </div>
                     )}
-                    <div className="relative z-10 h-full flex flex-col justify-between p-8">
+                    <div className="relative z-10 h-full flex flex-col justify-between gap-6 p-8">
                       <div className="flex justify-between items-start">
                         <Icon size={36} className="text-primary" strokeWidth={1.5} />
                         {s.badge && (
@@ -167,10 +168,8 @@ export default function HomePage() {
                         )}
                       </div>
                       <div>
-                        <h3 className="text-headline-md uppercase mb-2">{s.name}</h3>
-                        <p className="text-body-md text-foreground-muted max-w-md line-clamp-3">
-                          {s.description}
-                        </p>
+                        <h3 className="text-headline-md uppercase mb-3">{s.name}</h3>
+                        <ServiceDescription text={s.description} className="max-w-md" />
                       </div>
                     </div>
                   </Link>

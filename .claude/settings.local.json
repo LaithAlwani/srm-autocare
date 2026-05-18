@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npx convex *)",
       "Bash(npx tsc *)",
-      "Bash(npm uninstall *)"
+      "Bash(npm uninstall *)",
+      "Bash(node -e \"const m = require\\('lucide-react'\\); console.log\\(Object.keys\\(m\\).filter\\(k => /^Check/.test\\(k\\)\\).slice\\(0,10\\)\\)\")"
     ]
   }
 }
