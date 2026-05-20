@@ -160,7 +160,7 @@ export default function HomePage() {
                         />
                       </div>
                     )}
-                    <div className="relative z-10 h-full flex flex-col justify-between gap-6 p-8">
+                    <div className="relative z-10 h-full flex flex-col gap-6 p-8">
                       <div className="flex justify-between items-start">
                         <Icon size={36} className="text-primary" strokeWidth={1.5} />
                         {s.badge && (
