@@ -11,6 +11,7 @@ import { HeroMedia } from "@/components/hero-media";
 import { heroMedia } from "@/config/media";
 import { resolveIcon } from "@/lib/icons";
 import { ServiceDescription } from "@/components/ui/service-description";
+import { AddOnsList } from "@/components/add-ons-list";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 
 export default function ServicesPage() {
@@ -118,6 +119,13 @@ export default function ServicesPage() {
           )}
         </Container>
       </section>
+
+      {/* ADD-ONS — auto-hides itself when the shop hasn't configured any.
+          Tinted background gives it a clear break from the service grid. */}
+      <AddOnsList
+        subhead="Bolt any of these onto a service during checkout. Each extends the appointment by the listed duration."
+        className="bg-surface-container-low"
+      />
     </div>
   );
 }

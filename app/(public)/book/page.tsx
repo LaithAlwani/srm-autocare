@@ -20,8 +20,9 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
 import { HeroMedia } from "@/components/hero-media";
 import { heroMedia } from "@/config/media";
-import { MonerisPaymentForm } from "@/components/moneris-payment-form";
+import { SquarePaymentForm } from "@/components/square-payment-form";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
+import { computeDepositCents } from "@/lib/booking";
 import { resolveIcon } from "@/lib/icons";
 
 type Step = 0 | 1 | 2 | 3 | 4;
@@ -68,7 +69,7 @@ export default function BookPage() {
   const addOns = useQuery(api.addOns.list, {});
   const listSlots = useAction(api.calcom.listSlots);
   const findNextAvailableDate = useAction(api.calcom.findNextAvailableDate);
-  const createCheckoutPreload = useAction(api.moneris.createCheckoutPreload);
+  const createDraftBooking = useAction(api.square.createDraftBooking);
 
   const [step, setStep] = useState<Step>(0);
   const [serviceId, setServiceId] = useState<Id<"services"> | null>(
@@ -96,12 +97,16 @@ export default function BookPage() {
   });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  // Moneris hands us a one-shot ticket + the order number we generated. Both
-  // are required to mount the iframe and to verify the payment server-side.
+  // The Square preload returns everything we need to mount the Web Payments
+  // SDK on step 4: a freshly-minted idempotency key (also used as the URL
+  // token on the success page), the deposit amount, and the public app /
+  // location IDs that initialize the SDK on the client.
   const [paymentSession, setPaymentSession] = useState<{
-    ticket: string;
-    orderNo: string;
-    env: "qa" | "prod";
+    idempotencyKey: string;
+    depositCents: number;
+    applicationId: string;
+    locationId: string;
+    environment: "sandbox" | "production";
   } | null>(null);
   // Add-ons selected for the current booking. Stored as IDs; we resolve them
   // to full rows when computing totals + when submitting to the backend.
@@ -127,8 +132,12 @@ export default function BookPage() {
   // every add-on's duration. Drives Cal.com slot lookups + the deposit math.
   const totalDurationMinutes =
     (selectedService?.durationMinutes ?? 0) + addOnsTotalMinutes;
-  const totalDepositCents =
-    (selectedService?.depositCents ?? 0) + addOnsTotalCents;
+  // Deposit is 33% of (service price + add-on prices). Computed via the
+  // shared `computeDepositCents` helper so the server (square.ts) and the
+  // UI always arrive at the same number — Square charges whatever the
+  // server says, never what the client previews.
+  const totalCents = (selectedService?.priceFromCents ?? 0) + addOnsTotalCents;
+  const totalDepositCents = computeDepositCents(totalCents);
 
   // Step navigation that auto-jumps over Add-ons when the shop hasn't
   // configured any. Both helpers clamp to valid Step values.
@@ -210,7 +219,7 @@ export default function BookPage() {
       // customer can't book on top of the tail end.
       const slotEnd = slotStart + totalDurationMinutes * 60 * 1000;
 
-      const session = await createCheckoutPreload({
+      const session = await createDraftBooking({
         serviceId,
         slotStart,
         slotEnd,
@@ -353,7 +362,8 @@ export default function BookPage() {
                                 {formatPriceFromCents(s.priceFromCents)}
                               </span>
                               <span className="text-label-tech text-foreground-muted ml-auto">
-                                Deposit {formatPriceFromCents(s.depositCents)}
+                                Deposit{" "}
+                                {formatPriceFromCents(computeDepositCents(s.priceFromCents))}
                               </span>
                             </div>
                           </div>
@@ -694,10 +704,12 @@ export default function BookPage() {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2">
                     <div className="gloss-card p-4 md:p-6">
-                      <MonerisPaymentForm
-                        ticket={paymentSession.ticket}
-                        orderNo={paymentSession.orderNo}
-                        env={paymentSession.env}
+                      <SquarePaymentForm
+                        applicationId={paymentSession.applicationId}
+                        locationId={paymentSession.locationId}
+                        environment={paymentSession.environment}
+                        idempotencyKey={paymentSession.idempotencyKey}
+                        depositCents={paymentSession.depositCents}
                       />
                     </div>
                   </div>

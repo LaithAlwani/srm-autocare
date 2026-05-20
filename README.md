@@ -6,7 +6,7 @@ Premium car-detailing site built on Next.js 16 + Convex.
 - **Brand info**: centralized in `config/site.ts` (nav, contact, address, social). Editable site copy (hero, process steps) lives in Convex `siteContent` so the admin can change it without a redeploy.
 - **Backend**: Convex 1.38 (schema, queries, mutations, file storage, HTTP routes).
 - **Auth**: Convex Auth Email OTP via Resend — admin-only sign-in (`/admin/login`).
-- **Booking**: Cal.com slot availability + Moneris Checkout deposit. The booking is persisted as a draft on preload, promoted to confirmed once Moneris's receipt verifies the payment server-side, then pushed to Cal.com.
+- **Booking**: Cal.com slot availability + Square Web Payments SDK deposit. The booking is persisted as a draft when the customer reaches the Payment step, promoted to confirmed once Square approves the charge, then pushed to Cal.com.
 
 ## Getting started
 
@@ -18,7 +18,7 @@ npm install
 npx convex login
 npx convex dev   # leave this running in a separate terminal — it watches convex/ and pushes
 
-# 3. Copy env template and fill in values from convex dashboard / Moneris / Cal.com / Resend
+# 3. Copy env template and fill in values from convex dashboard / Square / Cal.com / Resend
 cp .env.local.example .env.local
 
 # 4. Seed the database (services + reviews + sample siteContent)
@@ -55,53 +55,64 @@ After saving, every reschedule updates the booking row's `slotStart` / `slotEnd`
 and swaps the Cal.com UID. Every cancellation flips the row's `status` to
 `cancelled`. Both fire an owner notification email via Resend.
 
-## Moneris Checkout setup
+## Square Web Payments SDK setup
 
-The booking flow uses **Moneris Checkout** — Moneris's modern embedded-iframe
-product. Two pieces of setup, one required, one optional.
+The booking flow uses **Square's Web Payments SDK** — Square's modern
+embedded card form. Two pieces of setup, one required, one optional.
 
-### 1. Create a Checkout profile in MRC (required)
+### 1. Create an application in the Square Developer Dashboard (required)
 
-1. Sign in to https://www3.moneris.com (or the test gateway equivalent).
-2. **Admin → Checkout** → **New Checkout** (or open an existing one).
-3. Configure styling, payment methods, etc. — most defaults are fine.
-4. Copy the **Checkout ID** that MRC assigns it.
-5. Push to Convex (test or prod, see env table in `.env.local.example`):
-   ```bash
-   npx convex env set MONERIS_STORE_ID <store_id>     # 'store5' for test
-   npx convex env set MONERIS_API_TOKEN <api_token>   # 'yesguy' for test
-   npx convex env set MONERIS_CHECKOUT_ID <checkout_id>
-   npx convex env set NEXT_PUBLIC_MONERIS_ENVIRONMENT qa   # or 'prod'
-   ```
-
-The synchronous flow (preload → iframe → verify) works with just the above.
-
-### 2. Async notifications webhook (optional, recommended for prod)
-
-Catches refunds initiated inside MRC + the rare case where a customer closes
-the tab between Moneris approving and our verifyAndConfirm call returning.
-
-1. **Admin → Asynchronous Notifications** → enable
-2. **Subscriber URL**: `https://<convex-site-url>/moneris/notification`
-3. **Secret**: generate one with `openssl rand -hex 32`
+1. Sign in to https://developer.squareup.com/apps and click **Create app**.
+2. Open the app's **Sandbox** tab (we test against this first).
+3. Copy three values from the **Credentials** page:
+   - **Application ID** (`sandbox-sq0idb-…`) — public, used by the SDK.
+   - **Location ID** (`L…`) — public; also needed server-side. The default
+     location works fine for testing.
+   - **Access token** (`EAAAl…`) — server-side, secret. Never ship this to
+     the browser.
 4. Push to Convex:
    ```bash
-   npx convex env set MONERIS_HMAC_KEY <the-secret>
+   npx convex env set SQUARE_ACCESS_TOKEN <access-token>
+   npx convex env set NEXT_PUBLIC_SQUARE_APPLICATION_ID <application-id>
+   npx convex env set NEXT_PUBLIC_SQUARE_LOCATION_ID <location-id>
+   npx convex env set NEXT_PUBLIC_SQUARE_ENVIRONMENT sandbox   # or 'production'
+   ```
+5. Set the same `NEXT_PUBLIC_*` values in `.env.local` so the browser also
+   reads them at build time.
+
+That's everything required for synchronous payments. The customer enters
+card details, the SDK tokenizes them, the `confirmAndCharge` action charges
+the card, and the booking flips to confirmed.
+
+### 2. Webhook for refunds initiated in the Square Dashboard (optional)
+
+The webhook only matters if you expect refunds to be initiated **outside**
+the admin UI (i.e. directly from Square's web dashboard) — or you want
+defense-in-depth against the rare tab-close case.
+
+1. Square Developer Dashboard → your app → **Webhooks → Subscriptions** → **+ Add subscription**.
+2. **URL**: `https://<convex-site-url>/square/webhook`
+3. **Event types**: `payment.updated`, `refund.updated`.
+4. Save, then copy the **Signature key** that Square shows on the subscription page.
+5. Push both values to Convex:
+   ```bash
+   npx convex env set SQUARE_WEBHOOK_SIGNATURE_KEY <signature-key>
+   npx convex env set SQUARE_WEBHOOK_NOTIFICATION_URL https://<convex-site-url>/square/webhook
    ```
 
 `<convex-site-url>` is your Convex deployment's HTTP URL — find it via `npx convex dashboard`.
 
 ### Test cards
 
-In test mode (`NEXT_PUBLIC_MONERIS_ENVIRONMENT=qa` + test store/token):
+In sandbox mode (`NEXT_PUBLIC_SQUARE_ENVIRONMENT=sandbox`):
 
 | Card | Behavior |
 |---|---|
-| `4242 4242 4242 4242` | Visa, success |
-| `5454 5454 5454 5454` | Mastercard, success |
+| `4111 1111 1111 1111` | Visa, success |
+| `5105 1051 0510 5100` | Mastercard, success |
 | `4000 0000 0000 0002` | Decline |
 
-Use any future expiry, any 3-digit CVD.
+Use any future expiry, any 3-digit CVV, postal `94103`.
 
 ## Project structure
 
@@ -110,7 +121,7 @@ app/
   (public)/         ← marketing site (navbar + footer)
     page.tsx          home
     services/, gallery/, about/, contact/
-    book/             multi-step booking flow + Moneris Checkout
+    book/             multi-step booking flow + Square Web Payments SDK
   admin/
     login/            OTP sign-in (no admin shell)
     (authed)/         protected: dashboard, services, gallery, bookings, reviews, settings
@@ -124,8 +135,8 @@ convex/
   services/gallery/reviews/siteContent.ts   public + admin CRUD
   bookings.ts         booking lifecycle (draft → confirmed → cancelled / completed)
   calcom.ts           slot listing + booking creation
-  moneris.ts          Moneris Checkout preload + verify + refund actions
-  http.ts             Moneris notification + Cal.com webhook + auth routes
+  square.ts           Square preload + confirmAndCharge + refund actions
+  http.ts             Square webhook + Cal.com webhook + auth routes
   crons.ts            sweeps abandoned booking drafts every 15 min
   seed.ts             bootstrap services + promote owner
 proxy.ts            Next.js 16 proxy (was middleware) — gates /admin/*

@@ -11,15 +11,16 @@ import { formatPriceFromCents, formatDateTime } from "@/lib/format";
 
 export default function BookSuccessPage() {
   const searchParams = useSearchParams();
-  // Moneris's payment_receipt callback is what brought us here — components/
-  // moneris-payment-form.tsx pushes us to /book/success?order_no=... after
-  // calling verifyAndConfirm. The booking row will already exist (created
-  // as a draft during preload, promoted to confirmed by verifyAndConfirm).
+  // The Square payment form pushed us here with the idempotency key in
+  // ?order_no=... after confirmAndCharge promoted the draft to confirmed.
+  // The booking row was created up front (during the draft preload) and
+  // promoted in place — the lookup below will always find it unless the
+  // customer hand-edited the URL.
   const orderNo = searchParams.get("order_no");
 
   const booking = useQuery(
-    api.bookings.getByMonerisOrder,
-    orderNo ? { orderNo } : "skip",
+    api.bookings.getBySquareIdempotency,
+    orderNo ? { idempotencyKey: orderNo } : "skip",
   );
 
   return (
@@ -35,8 +36,8 @@ export default function BookSuccessPage() {
             </div>
           ) : booking === null ? (
             <p className="text-foreground-muted">
-              We couldn't find that booking yet. Refresh in a few seconds — Moneris is still
-              notifying us.
+              We couldn't find that booking yet. Refresh in a few seconds — Square is still
+              settling the payment.
             </p>
           ) : (
             <>

@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { query, action, internalMutation } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import { slugify } from "../lib/booking";
 
 // PUBLIC: list active services for marketing pages.
 export const list = query({
@@ -65,11 +66,9 @@ export const get = query({
 
 const baseFields = {
   name: v.string(),
-  slug: v.string(),
   description: v.string(),
   durationMinutes: v.number(),
   priceFromCents: v.number(),
-  depositCents: v.number(),
   imageStorageId: v.optional(v.id("_storage")),
   icon: v.optional(v.string()),
   badge: v.optional(v.string()),
@@ -85,13 +84,19 @@ export const create = action({
       throw new Error("Not authorized");
     }
 
+    // Slug is derived from the name — admins don't enter it. We do this
+    // server-side so the slug is always normalized regardless of which
+    // client made the call.
+    const slug = slugify(args.name);
+    if (!slug) throw new Error("Service name must contain at least one letter or digit");
+
     // 1. Create the matching Cal.com event type — fail fast if Cal.com errors,
     //    so we never end up with a service that has no bookable calendar.
     const { eventTypeId } = await ctx.runAction(
       internal.calcom.createEventTypeInternal,
       {
         title: args.name,
-        slug: args.slug,
+        slug,
         lengthInMinutes: args.durationMinutes,
         description: args.description,
       },
@@ -100,6 +105,7 @@ export const create = action({
     // 2. Insert the service row with the captured event type id.
     return await ctx.runMutation(internal.services.insertInternal, {
       ...args,
+      slug,
       calcomEventTypeId: eventTypeId,
     });
   },
@@ -110,11 +116,9 @@ export const update = action({
     id: v.id("services"),
     patch: v.object({
       name: v.optional(v.string()),
-      slug: v.optional(v.string()),
       description: v.optional(v.string()),
       durationMinutes: v.optional(v.number()),
       priceFromCents: v.optional(v.number()),
-      depositCents: v.optional(v.number()),
       imageStorageId: v.optional(v.union(v.id("_storage"), v.null())),
       icon: v.optional(v.string()),
       badge: v.optional(v.string()),
@@ -129,6 +133,16 @@ export const update = action({
     }
     const existing = await ctx.runQuery(api.services.get, { id: args.id });
     if (!existing) throw new Error("Service not found");
+
+    // Re-derive the slug whenever the name changes so URLs stay in sync
+    // automatically. If the name itself didn't change, slug is left alone.
+    const slugPatch =
+      args.patch.name !== undefined && args.patch.name !== existing.name
+        ? { slug: slugify(args.patch.name) }
+        : {};
+    if ("slug" in slugPatch && !slugPatch.slug) {
+      throw new Error("Service name must contain at least one letter or digit");
+    }
 
     // 1. Sync the change to Cal.com if the row is linked. We only care about
     //    fields Cal.com knows: title (name), duration, description.
@@ -161,10 +175,11 @@ export const update = action({
       }
     }
 
-    // 2. Patch the local row.
+    // 2. Patch the local row — including a regenerated slug when the name
+    //    changed.
     await ctx.runMutation(internal.services.patchInternal, {
       id: args.id,
-      patch: args.patch,
+      patch: { ...args.patch, ...slugPatch },
     });
   },
 });
@@ -200,6 +215,9 @@ export const remove = action({
 export const insertInternal = internalMutation({
   args: {
     ...baseFields,
+    // Slug is supplied by the action (derived from the name) rather than
+    // accepted from the admin form.
+    slug: v.string(),
     calcomEventTypeId: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -212,11 +230,12 @@ export const patchInternal = internalMutation({
     id: v.id("services"),
     patch: v.object({
       name: v.optional(v.string()),
+      // `slug` is patched here when the action re-derives it after a name
+      // change. Admins don't have a slug field to edit directly.
       slug: v.optional(v.string()),
       description: v.optional(v.string()),
       durationMinutes: v.optional(v.number()),
       priceFromCents: v.optional(v.number()),
-      depositCents: v.optional(v.number()),
       imageStorageId: v.optional(v.union(v.id("_storage"), v.null())),
       icon: v.optional(v.string()),
       badge: v.optional(v.string()),

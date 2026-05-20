@@ -289,7 +289,7 @@ export default function AdminBookingsPage() {
                   {isCancelled &&
                     b.paymentStatus !== "refunded" &&
                     b.paymentStatus !== "failed" &&
-                    b.monerisTxnId && (
+                    b.squarePaymentId && (
                       <button
                         type="button"
                         onClick={() =>

@@ -17,7 +17,7 @@ export const list = query({
 
 // INTERNAL: resolve a list of add-on IDs back to full rows. Used by the
 // booking flow to snapshot the price + duration onto the booking row, and
-// by the Moneris preload + Cal.com booking creation to know the right total.
+// by the Square preload + Cal.com booking creation to know the right total.
 export const getMany = internalQuery({
   args: { ids: v.array(v.id("addOns")) },
   handler: async (ctx, args) => {

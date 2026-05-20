@@ -17,11 +17,11 @@ import type * as crons from "../crons.js";
 import type * as files from "../files.js";
 import type * as gallery from "../gallery.js";
 import type * as http from "../http.js";
-import type * as moneris from "../moneris.js";
 import type * as reviews from "../reviews.js";
 import type * as seed from "../seed.js";
 import type * as services from "../services.js";
 import type * as siteContent from "../siteContent.js";
+import type * as square from "../square.js";
 import type * as users from "../users.js";
 
 import type {
@@ -40,11 +40,11 @@ declare const fullApi: ApiFromModules<{
   files: typeof files;
   gallery: typeof gallery;
   http: typeof http;
-  moneris: typeof moneris;
   reviews: typeof reviews;
   seed: typeof seed;
   services: typeof services;
   siteContent: typeof siteContent;
+  square: typeof square;
   users: typeof users;
 }>;
 

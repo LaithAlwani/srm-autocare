@@ -29,7 +29,11 @@ export default defineSchema({
     description: v.string(),
     durationMinutes: v.number(),
     priceFromCents: v.number(),
-    depositCents: v.number(),
+    // Deprecated — kept optional so legacy rows still validate. New code
+    // always derives the deposit on the fly as DEPOSIT_FRACTION * total via
+    // `computeDepositCents` in lib/booking.ts. Safe to delete the field
+    // (and the leftover values) once you don't mind dropping the column.
+    depositCents: v.optional(v.number()),
     imageStorageId: v.optional(v.id("_storage")),
     icon: v.optional(v.string()),
     badge: v.optional(v.string()),
@@ -116,15 +120,19 @@ export default defineSchema({
     // tell partial vs full refunds and allow further partial refunds up to
     // the remaining balance.
     refundedAmountCents: v.optional(v.number()),
-    // Moneris identifiers. `monerisOrderId` is OUR generated unique order
-    // number — used as the idempotency key (also flows to Moneris as `order_no`).
-    // `monerisTxnId` is Moneris's id from the receipt response, required for
-    // refunds against the original transaction.
+    // Square identifiers. `squareIdempotencyKey` is OUR generated UUID
+    // (e.g. `srm-<uuid>`) — sent to Square as the `idempotency_key` on the
+    // payment request, used as our lookup key for the draft→confirmed
+    // transition, and exposed as the `order_no` URL token on /book/success.
+    // `squarePaymentId` is Square's payment id from the /v2/payments response,
+    // required for refunds against the original payment.
+    squareIdempotencyKey: v.optional(v.string()),
+    squarePaymentId: v.optional(v.string()),
+    // Deprecated — kept optional so existing rows from prior processors still
+    // validate. New bookings never write these. Safe to remove alongside a
+    // one-shot delete-fields migration if/when the rows are pruned.
     monerisOrderId: v.optional(v.string()),
     monerisTxnId: v.optional(v.string()),
-    // Deprecated — kept on the schema only so existing rows from the Stripe
-    // era still validate. New bookings never write these. Safe to remove
-    // alongside a one-shot delete-fields migration.
     stripeSessionId: v.optional(v.string()),
     stripePaymentIntentId: v.optional(v.string()),
     paymentStatus: v.union(
@@ -145,6 +153,6 @@ export default defineSchema({
     .index("by_email", ["customerEmail"])
     .index("by_status", ["status"])
     .index("by_slot_start", ["slotStart"])
-    .index("by_moneris_order", ["monerisOrderId"])
+    .index("by_square_idempotency_key", ["squareIdempotencyKey"])
     .index("by_calcom_uid", ["calComBookingId"]),
 });

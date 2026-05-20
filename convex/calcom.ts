@@ -156,7 +156,7 @@ export const listSlots = action({
 
     // Response shape (2024-09-04): { data: { "YYYY-MM-DD": [{ start }] } }
     // Cal.com is the single source of truth for availability — confirmed
-    // bookings are pushed to Cal.com after Moneris confirms payment.
+    // bookings are pushed to Cal.com after Square confirms payment.
     let data: Record<string, Array<{ start: string }>>;
     try {
       data = await fetchSlots(eventTypeId, startISO, endISO, duration);
@@ -399,7 +399,7 @@ export const rescheduleBookingInternal = internalAction({
   },
 });
 
-// INTERNAL: actually creates a booking in Cal.com after Moneris confirms payment.
+// INTERNAL: actually creates a booking in Cal.com after Square confirms payment.
 // Called from the webhook handler in http.ts which provides the resolved eventTypeId.
 export const createBookingInternal = internalAction({
   args: {

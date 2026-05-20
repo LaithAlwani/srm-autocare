@@ -11,15 +11,17 @@ const STATUS_LITERALS = [
   v.literal("completed"),
 ] as const;
 
-// PUBLIC: success page polls this with a Moneris order number to show
-// confirmation. Returns null until verifyAndConfirm (or the webhook) has
-// promoted the draft row to confirmed/paid.
-export const getByMonerisOrder = query({
-  args: { orderNo: v.string() },
+// PUBLIC: success page polls this with our Square idempotency key (used as
+// the `order_no` URL token) to show confirmation. Returns null until
+// confirmAndCharge (or the webhook) has promoted the draft to confirmed/paid.
+export const getBySquareIdempotency = query({
+  args: { idempotencyKey: v.string() },
   handler: async (ctx, args) => {
     const booking = await ctx.db
       .query("bookings")
-      .withIndex("by_moneris_order", (q) => q.eq("monerisOrderId", args.orderNo))
+      .withIndex("by_square_idempotency_key", (q) =>
+        q.eq("squareIdempotencyKey", args.idempotencyKey),
+      )
       .unique();
     if (!booking) return null;
     const service = await ctx.db.get(booking.serviceId);
@@ -27,33 +29,35 @@ export const getByMonerisOrder = query({
   },
 });
 
-// INTERNAL: same lookup as getByMonerisOrder but available to the webhook
-// + verifyAndConfirm without needing auth context.
-export const getInternalByMonerisOrder = internalQuery({
-  args: { orderNo: v.string() },
+// INTERNAL: same lookup as getBySquareIdempotency but available to the
+// webhook + confirmAndCharge without needing auth context.
+export const getInternalBySquareIdempotency = internalQuery({
+  args: { idempotencyKey: v.string() },
   handler: async (ctx, args) => {
     return await ctx.db
       .query("bookings")
-      .withIndex("by_moneris_order", (q) => q.eq("monerisOrderId", args.orderNo))
+      .withIndex("by_square_idempotency_key", (q) =>
+        q.eq("squareIdempotencyKey", args.idempotencyKey),
+      )
       .unique();
   },
 });
 
-// INTERNAL: lookup for the Moneris refund webhook — finds bookings by their
-// Moneris transaction id (set when payment was confirmed).
-export const getInternalByMonerisTxn = internalQuery({
-  args: { monerisTxnId: v.string() },
+// INTERNAL: lookup for the Square refund webhook — finds bookings by their
+// Square payment id (set when payment was confirmed).
+export const getInternalBySquarePaymentId = internalQuery({
+  args: { squarePaymentId: v.string() },
   handler: async (ctx, args) => {
     // No dedicated index; scans the most recent few hundred bookings for the
-    // matching txn id. Fine at our scale (a single shop), and avoids burning
-    // an index slot on a low-cardinality use case.
+    // matching payment id. Fine at our scale (a single shop), and avoids
+    // burning an index slot on a low-cardinality use case.
     const recent = await ctx.db.query("bookings").order("desc").take(500);
-    return recent.find((b) => b.monerisTxnId === args.monerisTxnId) ?? null;
+    return recent.find((b) => b.squarePaymentId === args.squarePaymentId) ?? null;
   },
 });
 
-// INTERNAL: bundle a booking + its service for the Moneris confirmation
-// flow, which needs both to call Cal.com.
+// INTERNAL: bundle a booking + its service for the post-payment flow, which
+// needs both to call Cal.com.
 export const getForCalcomDispatch = internalQuery({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -64,17 +68,17 @@ export const getForCalcomDispatch = internalQuery({
   },
 });
 
-// INTERNAL: insert a draft booking BEFORE the Moneris iframe is shown, so
-// the verify call + webhook can find it by order number and so the slot is
-// effectively soft-held while the customer is in checkout. Status starts at
-// pending; the cron sweeps abandoned drafts after 30 minutes.
+// INTERNAL: insert a draft booking BEFORE the Square card form is shown, so
+// the confirm call + webhook can find it by idempotency key and so the slot
+// is effectively soft-held while the customer is in checkout. Status starts
+// at pending; the cron sweeps abandoned drafts after 30 minutes.
 //
 // `selectedAddOns` is a SNAPSHOT (name/price/duration captured at booking
 // time), not just IDs, so historical bookings stay readable even if the
 // admin later edits or deletes the add-on row.
 export const createDraft = internalMutation({
   args: {
-    monerisOrderId: v.string(),
+    squareIdempotencyKey: v.string(),
     serviceId: v.id("services"),
     slotStart: v.number(),
     slotEnd: v.number(),
@@ -97,7 +101,7 @@ export const createDraft = internalMutation({
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("bookings", {
-      monerisOrderId: args.monerisOrderId,
+      squareIdempotencyKey: args.squareIdempotencyKey,
       serviceId: args.serviceId,
       slotStart: args.slotStart,
       slotEnd: args.slotEnd,
@@ -115,29 +119,31 @@ export const createDraft = internalMutation({
   },
 });
 
-// INTERNAL: promote a draft booking to confirmed/paid once Moneris confirms
-// payment. Idempotent — running twice (once from verifyAndConfirm, once from
-// the async webhook) is safe; only the first call returns isNew=true so the
-// caller can gate Cal.com side effects.
-export const confirmFromMoneris = internalMutation({
+// INTERNAL: promote a draft booking to confirmed/paid once Square confirms
+// payment. Idempotent — running twice (once from confirmAndCharge, once from
+// the payment.updated webhook) is safe; only the first call returns
+// isNew=true so the caller can gate Cal.com side effects.
+export const confirmFromPayment = internalMutation({
   args: {
-    orderNo: v.string(),
-    monerisTxnId: v.string(),
+    idempotencyKey: v.string(),
+    squarePaymentId: v.string(),
     amountCents: v.number(),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db
       .query("bookings")
-      .withIndex("by_moneris_order", (q) => q.eq("monerisOrderId", args.orderNo))
+      .withIndex("by_square_idempotency_key", (q) =>
+        q.eq("squareIdempotencyKey", args.idempotencyKey),
+      )
       .unique();
     if (!booking) {
-      throw new Error(`No draft booking for Moneris order ${args.orderNo}`);
+      throw new Error(`No draft booking for Square idempotency key ${args.idempotencyKey}`);
     }
     if (booking.paymentStatus === "paid" || booking.status === "confirmed") {
       return { id: booking._id, isNew: false };
     }
     await ctx.db.patch(booking._id, {
-      monerisTxnId: args.monerisTxnId,
+      squarePaymentId: args.squarePaymentId,
       paymentStatus: "paid",
       status: "confirmed",
     });
@@ -294,9 +300,9 @@ export const getInternal = internalQuery({
 });
 
 // INTERNAL: idempotent setter for refund state. Called both by the admin
-// refund action (immediately after Moneris accepts the request) AND by the
-// Moneris notification webhook. Uses the higher of {existing, incoming}
-// totals so out-of-order webhook deliveries don't roll back the state.
+// refund action (immediately after Square accepts the request) AND by the
+// Square webhook. Uses the higher of {existing, incoming} totals so
+// out-of-order webhook deliveries don't roll back the state.
 export const applyRefund = internalMutation({
   args: {
     bookingId: v.id("bookings"),
@@ -315,8 +321,8 @@ export const applyRefund = internalMutation({
 });
 
 // ADMIN: issue a refund for a booking. Defaults to the remaining unrefunded
-// balance; supports partial refunds. Hits Moneris first, then patches the
-// row only if Moneris accepted — never marks something refunded that wasn't
+// balance; supports partial refunds. Hits Square first, then patches the
+// row only if Square accepted — never marks something refunded that wasn't
 // actually refunded by the processor.
 export const adminRefund = action({
   args: {
@@ -333,8 +339,8 @@ export const adminRefund = action({
       id: args.bookingId,
     });
     if (!booking) throw new Error("Booking not found");
-    if (!booking.monerisTxnId || !booking.monerisOrderId) {
-      throw new Error("Booking has no Moneris transaction — nothing to refund");
+    if (!booking.squarePaymentId) {
+      throw new Error("Booking has no Square payment — nothing to refund");
     }
     if (booking.paymentStatus === "refunded") {
       throw new Error("Booking is already fully refunded");
@@ -350,18 +356,10 @@ export const adminRefund = action({
       throw new Error(`Refund amount must be between 1 and ${remaining} cents`);
     }
 
-    // A "purchase correction" (zero-fee same-day void) is only valid when
-    // we're refunding the full original deposit AND no partial refund has
-    // already chipped at it. Anything else has to be a real refund.
-    const preferCorrection =
-      amount === booking.depositAmountCents && alreadyRefunded === 0;
-
-    const refund = await ctx.runAction(internal.moneris.createRefundInternal, {
-      monerisTxnId: booking.monerisTxnId,
-      orderNo: booking.monerisOrderId,
+    const refund = await ctx.runAction(internal.square.createRefundInternal, {
+      squarePaymentId: booking.squarePaymentId,
       amountCents: amount,
       reason: args.reason,
-      preferCorrection,
     });
 
     await ctx.runMutation(internal.bookings.applyRefund, {
@@ -434,7 +432,7 @@ export const updateStatus = mutation({
 });
 
 // INTERNAL: cron sweep — drop draft bookings (status=pending) older than 30
-// minutes. They represent customers who opened the Moneris iframe and
+// minutes. They represent customers who opened the Square card form and
 // abandoned checkout; leaving them around clogs the pending list and gives
 // false impressions of held slots.
 export const cleanupAbandonedDrafts = internalMutation({

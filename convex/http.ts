@@ -8,72 +8,89 @@ const http = httpRouter();
 // Mounts /.well-known/openid-configuration, /api/auth/signin/*, etc.
 auth.addHttpRoutes(http);
 
-// Moneris async notification — optional defense-in-depth handler. The happy
-// path is that the customer pays, the iframe fires `payment_receipt`, and
-// our verifyAndConfirm action in moneris.ts immediately confirms the
-// booking. This webhook catches:
+// Square webhook — optional defense-in-depth handler. The happy path is
+// that the customer pays, our confirmAndCharge action in square.ts confirms
+// the booking synchronously, and this webhook is a no-op. It catches:
 //
-//   - Customers who close the tab between Moneris approving and our verify
-//     call coming back (rare but possible). Notification arrives later and
-//     promotes the draft to confirmed via the same idempotent mutation.
-//   - Refunds initiated directly inside Moneris's Merchant Resource Center
-//     (admin Refund button updates the row synchronously; this catches the
-//     out-of-band case).
+//   - Customers who close the tab between Square approving and our
+//     confirmAndCharge returning. The `payment.updated` event arrives later
+//     and promotes the draft via the same idempotent mutation.
+//   - Refunds initiated directly inside the Square Dashboard (admin Refund
+//     button updates the row synchronously; this catches the out-of-band case).
 //
-// Configure in MRC → Admin → Asynchronous Notifications:
-//   URL    https://<convex-site-url>/moneris/notification
-//   Method POST
-//   Secret stored as MONERIS_HMAC_KEY on the Convex deployment
+// Configure in Square Developer Dashboard → Webhook Subscriptions:
+//   Notification URL  https://<convex-site-url>/square/webhook
+//   Events            payment.updated, refund.updated
+//   Signature key     stored as SQUARE_WEBHOOK_SIGNATURE_KEY on the deployment
 //
-// Moneris signs the body with HMAC-SHA1 and sends the digest in the
-// `X-Moneris-Signature` header.
+// Square signs the request with HMAC-SHA256 over the notification URL
+// concatenated with the raw body and ships the digest as base64 in the
+// `x-square-hmacsha256-signature` header.
 http.route({
-  path: "/moneris/notification",
+  path: "/square/webhook",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
-    const secret = process.env.MONERIS_HMAC_KEY;
-    if (!secret) return new Response("Missing MONERIS_HMAC_KEY", { status: 500 });
+    const secret = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY;
+    if (!secret) return new Response("Missing SQUARE_WEBHOOK_SIGNATURE_KEY", { status: 500 });
 
-    const sig = req.headers.get("x-moneris-signature");
+    const sig = req.headers.get("x-square-hmacsha256-signature");
     if (!sig) return new Response("Missing signature", { status: 400 });
 
     const body = await req.text();
-    const expected = await hmacSha1Hex(secret, body);
-    if (!timingSafeEqual(expected, sig.toLowerCase())) {
+    // Square's HMAC is computed over (notification URL + body), not body
+    // alone. We must hash exactly what Square hashed, which means using the
+    // public-facing URL we registered in the dashboard — req.url here is
+    // the internal Convex URL, so we rebuild it from a configured value.
+    const notificationUrl =
+      process.env.SQUARE_WEBHOOK_NOTIFICATION_URL ??
+      `${process.env.CONVEX_SITE_URL ?? ""}/square/webhook`;
+    const expected = await hmacSha256Base64(secret, notificationUrl + body);
+    if (!timingSafeEqual(expected, sig)) {
       return new Response("Bad signature", { status: 400 });
     }
 
-    type MonerisPayload = {
-      txn_type?: string; // "purchase" | "refund" | ...
-      order_no?: string;
-      transaction_no?: string;
-      original_transaction_no?: string;
-      response_code?: string;
-      amount?: string;
+    type SquareWebhook = {
+      type?: string;
+      data?: {
+        object?: {
+          payment?: {
+            id?: string;
+            status?: string;
+            amount_money?: { amount?: number };
+            reference_id?: string;
+          };
+          refund?: {
+            id?: string;
+            status?: string;
+            payment_id?: string;
+            amount_money?: { amount?: number };
+          };
+        };
+      };
     };
-    let event: MonerisPayload;
+    let event: SquareWebhook;
     try {
-      event = JSON.parse(body) as MonerisPayload;
+      event = JSON.parse(body) as SquareWebhook;
     } catch {
       return new Response("Bad JSON", { status: 400 });
     }
 
-    const code = Number(event.response_code ?? "999");
-    if (!Number.isFinite(code) || code > 49) {
-      // Moneris response codes 00-49 are approvals; ignore declines.
-      return new Response("ignored (declined)", { status: 200 });
-    }
-    const amountCents = Math.round(Number(event.amount ?? "0") * 100);
-
-    if (event.txn_type === "purchase") {
-      if (!event.order_no || !event.transaction_no) {
-        return new Response("bad purchase payload", { status: 400 });
+    if (event.type === "payment.updated") {
+      const payment = event.data?.object?.payment;
+      if (!payment?.id || !payment.reference_id) {
+        return new Response("bad payment payload", { status: 400 });
       }
-      // Idempotent — verifyAndConfirm has almost certainly already fired.
-      // confirmFromMoneris returns isNew=false in that case.
-      const result = await ctx.runMutation(internal.bookings.confirmFromMoneris, {
-        orderNo: event.order_no,
-        monerisTxnId: event.transaction_no,
+      // Only act on completed payments. Square will fire payment.updated for
+      // CREATED / PENDING transitions too — those are noise for our use case.
+      if (payment.status !== "COMPLETED" && payment.status !== "APPROVED") {
+        return new Response("ignored (not completed)", { status: 200 });
+      }
+      const amountCents = payment.amount_money?.amount ?? 0;
+      // Idempotent — confirmAndCharge has almost certainly already fired.
+      // confirmFromPayment returns isNew=false in that case.
+      const result = await ctx.runMutation(internal.bookings.confirmFromPayment, {
+        idempotencyKey: payment.reference_id,
+        squarePaymentId: payment.id,
         amountCents,
       });
       // Webhook firing first (rare) means we still need to schedule Cal.com.
@@ -86,7 +103,6 @@ http.route({
             data.service?.calcomEventTypeId ?? Number(process.env.CALCOM_EVENT_TYPE_ID);
           if (eventTypeId && Number.isFinite(eventTypeId)) {
             try {
-              // Reflect any add-on extensions in the Cal.com booking length.
               const totalMinutes = Math.max(
                 1,
                 Math.round((data.booking.slotEnd - data.booking.slotStart) / 60000),
@@ -109,7 +125,7 @@ http.route({
                 calComBookingId,
               });
             } catch (err) {
-              console.error("Cal.com booking failed from Moneris webhook", err);
+              console.error("Cal.com booking failed from Square webhook", err);
             }
           }
         }
@@ -117,20 +133,29 @@ http.route({
       return new Response("ok", { status: 200 });
     }
 
-    if (event.txn_type === "refund") {
-      // Refunds reference the ORIGINAL purchase txn id — that's the one we
-      // saved on the booking row.
-      const originalTxn = event.original_transaction_no;
-      if (!originalTxn) return new Response("bad refund payload", { status: 400 });
-      const booking = await ctx.runQuery(internal.bookings.getInternalByMonerisTxn, {
-        monerisTxnId: originalTxn,
+    if (event.type === "refund.updated") {
+      const refund = event.data?.object?.refund;
+      if (!refund?.payment_id) {
+        return new Response("bad refund payload", { status: 400 });
+      }
+      // Only act on completed/pending refunds. Square also fires this when a
+      // refund is REJECTED — leave the booking alone in that case.
+      if (refund.status !== "COMPLETED" && refund.status !== "PENDING") {
+        return new Response("ignored (refund not settled)", { status: 200 });
+      }
+      const booking = await ctx.runQuery(internal.bookings.getInternalBySquarePaymentId, {
+        squarePaymentId: refund.payment_id,
       });
       if (!booking) {
-        console.warn(`Refund webhook: no booking with moneris txn ${originalTxn}`);
+        console.warn(`Refund webhook: no booking with Square payment ${refund.payment_id}`);
         return new Response("ignored", { status: 200 });
       }
-      // Webhook payload is the amount of THIS refund, not the cumulative
-      // total. Add it to whatever's already recorded.
+      // Square's webhook payload is the cumulative refund amount for this
+      // specific refund row. A payment can have multiple partial refunds, so
+      // we sum what's on the booking already with the incoming amount. The
+      // applyRefund mutation picks max(existing, incoming) to stay
+      // monotonic in case events arrive out of order.
+      const amountCents = refund.amount_money?.amount ?? 0;
       const newTotal = (booking.refundedAmountCents ?? 0) + amountCents;
       await ctx.runMutation(internal.bookings.applyRefund, {
         bookingId: booking._id,
@@ -214,8 +239,9 @@ http.route({
   }),
 });
 
-// HMAC-SHA256 of `body` using `secret`, hex-encoded. Uses Web Crypto so it
-// runs in Convex's default V8 runtime without needing "use node".
+// HMAC-SHA256 of `body` using `secret`, hex-encoded. Used by the Cal.com
+// webhook. Uses Web Crypto so it runs in Convex's default V8 runtime
+// without needing "use node".
 async function hmacSha256Hex(secret: string, body: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -231,20 +257,21 @@ async function hmacSha256Hex(secret: string, body: string): Promise<string> {
     .join("");
 }
 
-// HMAC-SHA1 — Moneris's notification signature uses SHA1 (legacy).
-async function hmacSha1Hex(secret: string, body: string): Promise<string> {
+// HMAC-SHA256, base64-encoded. Square ships its webhook signature in base64.
+async function hmacSha256Base64(secret: string, body: string): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
     encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-1" },
+    { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
   const buf = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

@@ -13,6 +13,7 @@ import { ServiceDescription } from "@/components/ui/service-description";
 import { siteConfig } from "@/config/site";
 import { heroMedia } from "@/config/media";
 import { HeroMedia } from "@/components/hero-media";
+import { AddOnsList } from "@/components/add-ons-list";
 
 type SiteHero = {
   eyebrow?: string;
@@ -179,6 +180,11 @@ export default function HomePage() {
           )}
         </Container>
       </section>
+
+      {/* ADD-ONS — auto-hides itself when the shop hasn't configured any. */}
+      <AddOnsList
+        subhead="Optional extras you can stack onto any service during booking. Each one extends the appointment by the listed duration."
+      />
 
       {/* PROCESS */}
       <section id="process" className="section-y bg-surface-container-low">

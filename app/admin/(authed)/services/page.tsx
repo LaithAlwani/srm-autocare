@@ -9,17 +9,16 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
 import { ConfirmModal } from "@/components/admin/confirm-modal";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
+import { computeDepositCents, slugify } from "@/lib/booking";
 import { ICON_OPTIONS, resolveIcon } from "@/lib/icons";
 
 type FormState = {
   name: string;
-  slug: string;
   description: string;
   durationMinutes: number;
   // Dollars, with 2-decimal precision. Converted to cents on save so the
   // backend can stay integer-only (no floating-point currency bugs).
   priceFromDollars: number;
-  depositDollars: number;
   icon: string;
   badge: string;
   order: number;
@@ -28,11 +27,9 @@ type FormState = {
 
 const EMPTY_FORM: FormState = {
   name: "",
-  slug: "",
   description: "",
   durationMinutes: 60,
   priceFromDollars: 0,
-  depositDollars: 0,
   icon: ICON_OPTIONS[0],
   badge: "",
   order: 999,
@@ -62,11 +59,9 @@ export default function AdminServicesPage() {
     setEditingId(s._id);
     setForm({
       name: s.name,
-      slug: s.slug,
       description: s.description,
       durationMinutes: s.durationMinutes,
       priceFromDollars: centsToDollars(s.priceFromCents),
-      depositDollars: centsToDollars(s.depositCents),
       icon: s.icon ?? ICON_OPTIONS[0],
       badge: s.badge ?? "",
       order: s.order,
@@ -84,15 +79,12 @@ export default function AdminServicesPage() {
     setError(null);
     try {
       const priceFromCents = dollarsToCents(form.priceFromDollars);
-      const depositCents = dollarsToCents(form.depositDollars);
       if (editingId === "new") {
         await createService({
           name: form.name,
-          slug: form.slug,
           description: form.description,
           durationMinutes: form.durationMinutes,
           priceFromCents,
-          depositCents,
           icon: form.icon || undefined,
           badge: form.badge || undefined,
           order: form.order,
@@ -103,11 +95,9 @@ export default function AdminServicesPage() {
           id: editingId,
           patch: {
             name: form.name,
-            slug: form.slug,
             description: form.description,
             durationMinutes: form.durationMinutes,
             priceFromCents,
-            depositCents,
             icon: form.icon || undefined,
             badge: form.badge || undefined,
             order: form.order,
@@ -153,12 +143,22 @@ export default function AdminServicesPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Field label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} />
-            <Field
-              label="Slug (URL key)"
-              value={form.slug}
-              onChange={(v) => setForm((f) => ({ ...f, slug: v.toLowerCase().replace(/[^a-z0-9-]/g, "-") }))}
-            />
+            <div className="md:col-span-2">
+              <Field
+                label="Name"
+                value={form.name}
+                onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+              />
+              {/* The slug is auto-derived from the name and shown read-only so
+                  the owner can see what the URL will look like — no extra
+                  field to fill in. */}
+              <p className="text-label-tech text-foreground-muted mt-2">
+                URL slug:{" "}
+                <span className="font-mono-tech text-foreground">
+                  {slugify(form.name) || "—"}
+                </span>
+              </p>
+            </div>
             <div className="md:col-span-2">
               <label className="text-label-tech text-foreground-muted mb-2 block">Description</label>
               <textarea
@@ -178,16 +178,21 @@ export default function AdminServicesPage() {
               value={form.order}
               onChange={(v) => setForm((f) => ({ ...f, order: v }))}
             />
-            <MoneyField
-              label="Price from"
-              value={form.priceFromDollars}
-              onChange={(v) => setForm((f) => ({ ...f, priceFromDollars: v }))}
-            />
-            <MoneyField
-              label="Deposit"
-              value={form.depositDollars}
-              onChange={(v) => setForm((f) => ({ ...f, depositDollars: v }))}
-            />
+            <div>
+              <MoneyField
+                label="Price from"
+                value={form.priceFromDollars}
+                onChange={(v) => setForm((f) => ({ ...f, priceFromDollars: v }))}
+              />
+              <p className="text-label-tech text-foreground-muted mt-2">
+                Deposit (33%):{" "}
+                <span className="font-mono-tech text-foreground">
+                  {formatPriceFromCents(
+                    computeDepositCents(dollarsToCents(form.priceFromDollars)),
+                  )}
+                </span>
+              </p>
+            </div>
             <div>
               <label className="text-label-tech text-foreground-muted mb-2 block">Icon</label>
               <select
@@ -311,7 +316,7 @@ export default function AdminServicesPage() {
                           {formatPriceFromCents(s.priceFromCents)}
                         </div>
                         <div className="text-label-tech text-foreground-muted mt-1">
-                          {formatPriceFromCents(s.depositCents)} dep.
+                          {formatPriceFromCents(computeDepositCents(s.priceFromCents))} dep.
                         </div>
                       </td>
                       <td className="p-4 text-center text-label-tech">
@@ -396,9 +401,9 @@ export default function AdminServicesPage() {
                     <dd className="text-right text-foreground font-mono-tech">
                       {formatPriceFromCents(s.priceFromCents)}
                     </dd>
-                    <dt className="text-foreground-muted">Deposit</dt>
+                    <dt className="text-foreground-muted">Deposit (33%)</dt>
                     <dd className="text-right text-foreground-muted font-mono-tech">
-                      {formatPriceFromCents(s.depositCents)}
+                      {formatPriceFromCents(computeDepositCents(s.priceFromCents))}
                     </dd>
                     <dt className="text-foreground-muted">Cal.com</dt>
                     <dd className="text-right">
