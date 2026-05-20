@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query, action, internalAction, internalMutation } from "./_generated/server";
+import { query, action, internalMutation } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
@@ -231,51 +231,6 @@ export const patchInternal = internalMutation({
       patch.imageStorageId = imageStorageId === null ? undefined : imageStorageId;
     }
     await ctx.db.patch(args.id, patch);
-  },
-});
-
-// One-shot maintenance: re-asserts our Cal.com event type defaults
-// (slotInterval, lengthInMinutesOptions) on every linked service. Run this
-// once after deploying changes that alter our event-type baseline so
-// previously-created event types catch up. Returns a per-service report so
-// the operator can spot any that failed (e.g. event type was deleted in
-// Cal.com). Exposed as `internalAction` so it's callable from `npx convex
-// run` without an authenticated user — admin CLI is the access boundary.
-export const repairCalcomEventTypes = internalAction({
-  args: {},
-  handler: async (
-    ctx,
-  ): Promise<Array<{ id: Id<"services">; name: string; status: "ok" | "skipped" | "error"; message?: string }>> => {
-    const services = await ctx.runQuery(api.services.list, { includeInactive: true });
-    const results: Array<{
-      id: Id<"services">;
-      name: string;
-      status: "ok" | "skipped" | "error";
-      message?: string;
-    }> = [];
-    for (const s of services) {
-      if (typeof s.calcomEventTypeId !== "number") {
-        results.push({ id: s._id, name: s.name, status: "skipped", message: "no Cal.com link" });
-        continue;
-      }
-      try {
-        await ctx.runAction(internal.calcom.updateEventTypeInternal, {
-          eventTypeId: s.calcomEventTypeId,
-          // Pass lengthInMinutes so lengthInMinutesOptions is regenerated too.
-          // slotInterval is reasserted unconditionally inside the action.
-          lengthInMinutes: s.durationMinutes,
-        });
-        results.push({ id: s._id, name: s.name, status: "ok" });
-      } catch (err) {
-        results.push({
-          id: s._id,
-          name: s.name,
-          status: "error",
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    return results;
   },
 });
 

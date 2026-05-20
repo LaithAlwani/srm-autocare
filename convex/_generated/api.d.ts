@@ -12,7 +12,6 @@ import type * as addOns from "../addOns.js";
 import type * as auth from "../auth.js";
 import type * as bookings from "../bookings.js";
 import type * as calcom from "../calcom.js";
-import type * as cleanup from "../cleanup.js";
 import type * as contact from "../contact.js";
 import type * as crons from "../crons.js";
 import type * as files from "../files.js";
@@ -36,7 +35,6 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   bookings: typeof bookings;
   calcom: typeof calcom;
-  cleanup: typeof cleanup;
   contact: typeof contact;
   crons: typeof crons;
   files: typeof files;
