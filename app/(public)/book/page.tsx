@@ -24,12 +24,16 @@ import { MonerisPaymentForm } from "@/components/moneris-payment-form";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 import { resolveIcon } from "@/lib/icons";
 
-type Step = 0 | 1 | 2 | 3;
+type Step = 0 | 1 | 2 | 3 | 4;
+// `Add-ons` is step 1. When the shop hasn't configured any active add-ons we
+// skip past it automatically (see `nextStep` / `prevStep` below) so the
+// customer never sees it.
 const STEP_LABELS: Record<Step, string> = {
   0: "Service",
-  1: "Slot",
-  2: "Details",
-  3: "Payment",
+  1: "Add-ons",
+  2: "Slot",
+  3: "Details",
+  4: "Payment",
 };
 
 // Today as `YYYY-MM-DD` in the browser's local zone. Used as the lower bound
@@ -61,6 +65,7 @@ function formatLongDate(iso: string): string {
 export default function BookPage() {
   const searchParams = useSearchParams();
   const services = useQuery(api.services.list, {});
+  const addOns = useQuery(api.addOns.list, {});
   const listSlots = useAction(api.calcom.listSlots);
   const findNextAvailableDate = useAction(api.calcom.findNextAvailableDate);
   const createCheckoutPreload = useAction(api.moneris.createCheckoutPreload);
@@ -98,27 +103,64 @@ export default function BookPage() {
     orderNo: string;
     env: "qa" | "prod";
   } | null>(null);
+  // Add-ons selected for the current booking. Stored as IDs; we resolve them
+  // to full rows when computing totals + when submitting to the backend.
+  const [selectedAddOnIds, setSelectedAddOnIds] = useState<Id<"addOns">[]>([]);
+
+  // True when the shop has at least one active add-on; gates the entire
+  // Add-ons step (skipped in stepper + nav when false).
+  const hasAddOns = (addOns?.length ?? 0) > 0;
+
+  const selectedAddOns = useMemo(
+    () => (addOns ?? []).filter((a) => selectedAddOnIds.includes(a._id)),
+    [addOns, selectedAddOnIds],
+  );
+  const addOnsTotalCents = selectedAddOns.reduce((sum, a) => sum + a.priceCents, 0);
+  const addOnsTotalMinutes = selectedAddOns.reduce((sum, a) => sum + a.durationMinutes, 0);
 
   const selectedService = useMemo(
     () => (serviceId ? services?.find((s) => s._id === serviceId) ?? null : null),
     [services, serviceId],
   );
 
-  // If a service was prefilled via ?service=, auto-advance to step 1.
+  // Total appointment minutes when the booking lands. Service duration plus
+  // every add-on's duration. Drives Cal.com slot lookups + the deposit math.
+  const totalDurationMinutes =
+    (selectedService?.durationMinutes ?? 0) + addOnsTotalMinutes;
+  const totalDepositCents =
+    (selectedService?.depositCents ?? 0) + addOnsTotalCents;
+
+  // Step navigation that auto-jumps over Add-ons when the shop hasn't
+  // configured any. Both helpers clamp to valid Step values.
+  function nextStep(from: Step): Step {
+    if (from === 0 && !hasAddOns) return 2;
+    return Math.min(4, from + 1) as Step;
+  }
+  function prevStep(from: Step): Step {
+    if (from === 2 && !hasAddOns) return 0;
+    return Math.max(0, from - 1) as Step;
+  }
+
+  // If a service was prefilled via ?service=, auto-advance past the Service
+  // step. Skips Add-ons too when the shop has none configured.
   useEffect(() => {
     if (serviceId && step === 0 && services && selectedService) {
-      setStep(1);
+      setStep(hasAddOns ? 1 : 2);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [services]);
+  }, [services, addOns]);
 
   // The first time the customer lands on the slot step for a given service,
   // jump them to the nearest day that actually has open slots — saves them
-  // clicking forward through empty days.
+  // clicking forward through empty days. We pass the *total* duration so the
+  // lookup respects any add-ons selected on the prior step.
   useEffect(() => {
-    if (step !== 1 || !serviceId || autoSelectedFor === serviceId) return;
+    if (step !== 2 || !serviceId || autoSelectedFor === serviceId) return;
     setAutoSelectedFor(serviceId);
-    findNextAvailableDate({ serviceId })
+    findNextAvailableDate({
+      serviceId,
+      totalDurationMinutes: totalDurationMinutes || undefined,
+    })
       .then((next) => {
         if (next && next >= minDate) setDate(next);
       })
@@ -126,7 +168,7 @@ export default function BookPage() {
         // If the lookup fails we just leave the date on today — the slot
         // fetch below will still run and surface its own error.
       });
-  }, [step, serviceId, autoSelectedFor, findNextAvailableDate, minDate]);
+  }, [step, serviceId, autoSelectedFor, findNextAvailableDate, minDate, totalDurationMinutes]);
 
   // Scroll the stepper into view whenever the step changes. Skip the very
   // first render so we don't jolt the page on initial mount. `start` block
@@ -140,16 +182,22 @@ export default function BookPage() {
     stepperRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [step]);
 
-  // Re-fetch slots when date, service, or step changes to step 1.
+  // Re-fetch slots when date, service, total duration, or step changes to
+  // the Slot step (step 2). totalDurationMinutes accounts for any selected
+  // add-ons so the slot lookup reserves enough room.
   useEffect(() => {
-    if (step !== 1 || !serviceId) return;
+    if (step !== 2 || !serviceId) return;
     setSlotLoading(true);
     setSlotError(null);
-    listSlots({ serviceId, dateISO: date })
+    listSlots({
+      serviceId,
+      dateISO: date,
+      totalDurationMinutes: totalDurationMinutes || undefined,
+    })
       .then((s) => setSlots(s))
       .catch((err) => setSlotError(err instanceof Error ? err.message : "Could not load slots"))
       .finally(() => setSlotLoading(false));
-  }, [step, date, serviceId, listSlots]);
+  }, [step, date, serviceId, listSlots, totalDurationMinutes]);
 
   async function handleBookAndPay() {
     if (!serviceId || !slotStartISO || !selectedService) return;
@@ -157,7 +205,10 @@ export default function BookPage() {
     setSubmitError(null);
     try {
       const slotStart = new Date(slotStartISO).getTime();
-      const slotEnd = slotStart + selectedService.durationMinutes * 60 * 1000;
+      // slotEnd must reflect the full appointment duration (service + add-ons)
+      // so the Cal.com booking blocks out the right window and a second
+      // customer can't book on top of the tail end.
+      const slotEnd = slotStart + totalDurationMinutes * 60 * 1000;
 
       const session = await createCheckoutPreload({
         serviceId,
@@ -168,9 +219,10 @@ export default function BookPage() {
         customerPhone: details.customerPhone.trim(),
         vehicleInfo: details.vehicleInfo.trim(),
         notes: details.notes.trim() || undefined,
+        addOnIds: selectedAddOnIds.length > 0 ? selectedAddOnIds : undefined,
       });
       setPaymentSession(session);
-      setStep(3);
+      setStep(4);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not create booking.");
     } finally {
@@ -198,16 +250,24 @@ export default function BookPage() {
         <Container>
           {/* Stepper — full version on desktop, compact line + progress bar on mobile. */}
           {(() => {
-            const total = Object.keys(STEP_LABELS).length;
+            // Visible steps depend on whether the shop has add-ons. We keep
+            // step indices stable internally (so the Step type can stay 0-4)
+            // and only filter for display.
+            const visibleSteps = (Object.entries(STEP_LABELS) as [string, string][])
+              .map(([k, label]) => [Number(k) as Step, label] as const)
+              .filter(([n]) => hasAddOns || n !== 1);
+            const total = visibleSteps.length;
+            const currentIndex = visibleSteps.findIndex(([n]) => n === step);
+            const displayIndex = currentIndex >= 0 ? currentIndex : 0;
             const currentLabel = STEP_LABELS[step];
-            const progress = ((step + 1) / total) * 100;
+            const progress = ((displayIndex + 1) / total) * 100;
             return (
               <div ref={stepperRef} className="scroll-mt-20">
                 {/* Mobile: condensed indicator */}
                 <div className="md:hidden mb-10">
                   <div className="flex items-baseline justify-between mb-2 text-label-tech">
                     <span className="text-primary">
-                      Step {String(step + 1).padStart(2, "0")} of {String(total).padStart(2, "0")}
+                      Step {String(displayIndex + 1).padStart(2, "0")} of {String(total).padStart(2, "0")}
                     </span>
                     <span className="text-foreground">{currentLabel}</span>
                   </div>
@@ -221,12 +281,11 @@ export default function BookPage() {
 
                 {/* Desktop: full stepper */}
                 <ol className="hidden md:flex gap-2 mb-12 text-label-tech">
-                  {(Object.entries(STEP_LABELS) as [string, string][]).map(([k, label]) => {
-                    const n = Number(k) as Step;
+                  {visibleSteps.map(([n, label], idx) => {
                     const active = step === n;
                     const done = step > n;
                     return (
-                      <li key={k} className="flex-1 flex items-center gap-3">
+                      <li key={n} className="flex-1 flex items-center gap-3">
                         <span
                           className={`w-8 h-8 flex items-center justify-center border ${
                             active
@@ -236,7 +295,7 @@ export default function BookPage() {
                                 : "border-border text-foreground-muted"
                           }`}
                         >
-                          {done ? <Check size={14} /> : `0${n + 1}`}
+                          {done ? <Check size={14} /> : `0${idx + 1}`}
                         </span>
                         <span className={active ? "text-foreground" : "text-foreground-muted"}>
                           {label}
@@ -308,7 +367,7 @@ export default function BookPage() {
                     variant="primary"
                     size="lg"
                     disabled={!serviceId}
-                    onClick={() => setStep(1)}
+                    onClick={() => setStep(nextStep(0))}
                   >
                     Continue
                     <ArrowRight size={14} />
@@ -317,8 +376,101 @@ export default function BookPage() {
               </div>
             )}
 
-            {step === 1 && selectedService && (
+            {step === 1 && selectedService && hasAddOns && (
               <div key="step-1" className="animate-slide-up">
+                <div className="flex items-baseline justify-between mb-8 gap-4 flex-wrap">
+                  <h2 className="text-headline-lg uppercase">Add-ons</h2>
+                  <span className="text-label-tech text-foreground-muted">
+                    Optional — skip any you don't need
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {(addOns ?? []).map((a) => {
+                    const selected = selectedAddOnIds.includes(a._id);
+                    return (
+                      <button
+                        key={a._id}
+                        type="button"
+                        onClick={() =>
+                          setSelectedAddOnIds((ids) =>
+                            ids.includes(a._id)
+                              ? ids.filter((id) => id !== a._id)
+                              : [...ids, a._id],
+                          )
+                        }
+                        className={`gloss-card p-6 text-left flex gap-4 items-start ${
+                          selected ? "border-primary glow-blue-soft" : ""
+                        }`}
+                      >
+                        <span
+                          aria-hidden
+                          className={`mt-1 w-5 h-5 shrink-0 flex items-center justify-center border ${
+                            selected
+                              ? "border-primary-strong bg-primary-strong text-on-primary"
+                              : "border-chrome"
+                          }`}
+                        >
+                          {selected && <Check size={12} />}
+                        </span>
+                        <div className="flex-1">
+                          <div className="flex items-baseline justify-between mb-1 gap-3">
+                            <h3 className="text-headline-md">{a.name}</h3>
+                            <span className="text-label-tech text-foreground-muted">
+                              +{formatDuration(a.durationMinutes)}
+                            </span>
+                          </div>
+                          {a.description && (
+                            <p className="text-body-md text-foreground-muted line-clamp-2 mb-3">
+                              {a.description}
+                            </p>
+                          )}
+                          <div className="text-headline-md text-primary">
+                            +{formatPriceFromCents(a.priceCents)}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedAddOns.length > 0 && (
+                  <div className="mt-8 gloss-card p-6 flex flex-wrap items-baseline gap-x-8 gap-y-2">
+                    <span className="text-label-tech text-foreground-muted">Running total</span>
+                    <span className="text-foreground">
+                      +{formatPriceFromCents(addOnsTotalCents)} •{" "}
+                      +{formatDuration(addOnsTotalMinutes)}
+                    </span>
+                    <span className="text-label-tech text-foreground-muted ml-auto">
+                      Appointment {formatDuration(totalDurationMinutes)}
+                    </span>
+                  </div>
+                )}
+
+                <div className="mt-12 flex justify-between">
+                  <Button variant="ghost" size="lg" onClick={() => setStep(prevStep(1))}>
+                    <ArrowLeft size={14} /> Back
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    onClick={() => {
+                      // Selecting different add-ons changes the appointment
+                      // length, so any previously-picked slot is stale — clear
+                      // it and force a fresh availability lookup.
+                      setSlotStartISO(null);
+                      setAutoSelectedFor(null);
+                      setStep(nextStep(1));
+                    }}
+                  >
+                    Continue
+                    <ArrowRight size={14} />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {step === 2 && selectedService && (
+              <div key="step-2" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Pick a time</h2>
                 <div className="gloss-card p-4 md:p-6 mb-8 flex flex-col md:flex-row md:items-center gap-4">
                   <DatePicker
@@ -330,7 +482,10 @@ export default function BookPage() {
                     }}
                   />
                   <div className="md:ml-auto text-label-tech text-foreground-muted">
-                    {selectedService.name} • {formatDuration(selectedService.durationMinutes)}
+                    {selectedService.name} • {formatDuration(totalDurationMinutes)}
+                    {selectedAddOns.length > 0 && (
+                      <> • {selectedAddOns.length} add-on{selectedAddOns.length === 1 ? "" : "s"}</>
+                    )}
                   </div>
                 </div>
 
@@ -366,14 +521,14 @@ export default function BookPage() {
                 )}
 
                 <div className="mt-12 flex justify-between">
-                  <Button variant="ghost" size="lg" onClick={() => setStep(0)}>
+                  <Button variant="ghost" size="lg" onClick={() => setStep(prevStep(2))}>
                     <ArrowLeft size={14} /> Back
                   </Button>
                   <Button
                     variant="primary"
                     size="lg"
                     disabled={!slotStartISO}
-                    onClick={() => setStep(2)}
+                    onClick={() => setStep(nextStep(2))}
                   >
                     Continue
                     <ArrowRight size={14} />
@@ -382,8 +537,8 @@ export default function BookPage() {
               </div>
             )}
 
-            {step === 2 && selectedService && slotStartISO && (
-              <div key="step-2" className="animate-slide-up">
+            {step === 3 && selectedService && slotStartISO && (
+              <div key="step-3" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Your details</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2 gloss-card p-8 space-y-6">
@@ -433,6 +588,24 @@ export default function BookPage() {
                     <h3 className="text-headline-md uppercase mb-6">Summary</h3>
                     <dl className="space-y-4 text-body-md mb-8">
                       <SummaryRow label="Service" value={selectedService.name} />
+                      {selectedAddOns.length > 0 && (
+                        <div>
+                          <dt className="text-label-tech text-foreground-muted mb-2">Add-ons</dt>
+                          <dd className="space-y-1">
+                            {selectedAddOns.map((a) => (
+                              <div
+                                key={a._id}
+                                className="flex justify-between gap-3 text-foreground"
+                              >
+                                <span>{a.name}</span>
+                                <span className="text-foreground-muted">
+                                  +{formatPriceFromCents(a.priceCents)}
+                                </span>
+                              </div>
+                            ))}
+                          </dd>
+                        </div>
+                      )}
                       <SummaryRow
                         label="Date"
                         value={new Date(slotStartISO).toLocaleDateString("en-CA", {
@@ -450,18 +623,20 @@ export default function BookPage() {
                       />
                       <SummaryRow
                         label="Duration"
-                        value={formatDuration(selectedService.durationMinutes)}
+                        value={formatDuration(totalDurationMinutes)}
                       />
                     </dl>
                     <div className="border-t border-border pt-4 mb-8">
                       <SummaryRow
                         label="Total (from)"
-                        value={formatPriceFromCents(selectedService.priceFromCents)}
+                        value={formatPriceFromCents(
+                          selectedService.priceFromCents + addOnsTotalCents,
+                        )}
                       />
                       <div className="flex justify-between items-baseline mt-2">
                         <span className="text-label-tech text-primary">Deposit due now</span>
                         <span className="text-headline-md text-primary">
-                          {formatPriceFromCents(selectedService.depositCents)}
+                          {formatPriceFromCents(totalDepositCents)}
                         </span>
                       </div>
                     </div>
@@ -501,15 +676,20 @@ export default function BookPage() {
                 </div>
 
                 <div className="mt-12 flex justify-start">
-                  <Button variant="ghost" size="lg" onClick={() => setStep(1)} disabled={submitting}>
+                  <Button
+                    variant="ghost"
+                    size="lg"
+                    onClick={() => setStep(prevStep(3))}
+                    disabled={submitting}
+                  >
                     <ArrowLeft size={14} /> Back
                   </Button>
                 </div>
               </div>
             )}
 
-            {step === 3 && selectedService && slotStartISO && paymentSession && (
-              <div key="step-3" className="animate-slide-up">
+            {step === 4 && selectedService && slotStartISO && paymentSession && (
+              <div key="step-4" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Payment</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2">
@@ -525,6 +705,24 @@ export default function BookPage() {
                     <h3 className="text-headline-md uppercase mb-6">Summary</h3>
                     <dl className="space-y-4 text-body-md mb-8">
                       <SummaryRow label="Service" value={selectedService.name} />
+                      {selectedAddOns.length > 0 && (
+                        <div>
+                          <dt className="text-label-tech text-foreground-muted mb-2">Add-ons</dt>
+                          <dd className="space-y-1">
+                            {selectedAddOns.map((a) => (
+                              <div
+                                key={a._id}
+                                className="flex justify-between gap-3 text-foreground"
+                              >
+                                <span>{a.name}</span>
+                                <span className="text-foreground-muted">
+                                  +{formatPriceFromCents(a.priceCents)}
+                                </span>
+                              </div>
+                            ))}
+                          </dd>
+                        </div>
+                      )}
                       <SummaryRow
                         label="When"
                         value={new Date(slotStartISO).toLocaleString("en-CA", {
@@ -537,14 +735,14 @@ export default function BookPage() {
                       />
                       <SummaryRow
                         label="Duration"
-                        value={formatDuration(selectedService.durationMinutes)}
+                        value={formatDuration(totalDurationMinutes)}
                       />
                     </dl>
                     <div className="border-t border-border pt-4">
                       <div className="flex justify-between items-baseline">
                         <span className="text-label-tech text-primary">Deposit due now</span>
                         <span className="text-headline-md text-primary">
-                          {formatPriceFromCents(selectedService.depositCents)}
+                          {formatPriceFromCents(totalDepositCents)}
                         </span>
                       </div>
                     </div>
@@ -557,7 +755,7 @@ export default function BookPage() {
                     size="lg"
                     onClick={() => {
                       setPaymentSession(null);
-                      setStep(2);
+                      setStep(prevStep(4));
                     }}
                   >
                     <ArrowLeft size={14} /> Back

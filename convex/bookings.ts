@@ -68,6 +68,10 @@ export const getForCalcomDispatch = internalQuery({
 // the verify call + webhook can find it by order number and so the slot is
 // effectively soft-held while the customer is in checkout. Status starts at
 // pending; the cron sweeps abandoned drafts after 30 minutes.
+//
+// `selectedAddOns` is a SNAPSHOT (name/price/duration captured at booking
+// time), not just IDs, so historical bookings stay readable even if the
+// admin later edits or deletes the add-on row.
 export const createDraft = internalMutation({
   args: {
     monerisOrderId: v.string(),
@@ -80,6 +84,16 @@ export const createDraft = internalMutation({
     vehicleInfo: v.string(),
     notes: v.optional(v.string()),
     depositAmountCents: v.number(),
+    selectedAddOns: v.optional(
+      v.array(
+        v.object({
+          id: v.id("addOns"),
+          name: v.string(),
+          priceCents: v.number(),
+          durationMinutes: v.number(),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("bookings", {
@@ -93,6 +107,7 @@ export const createDraft = internalMutation({
       vehicleInfo: args.vehicleInfo,
       notes: args.notes,
       depositAmountCents: args.depositAmountCents,
+      selectedAddOns: args.selectedAddOns,
       paymentStatus: "pending",
       status: "pending",
       createdAt: Date.now(),

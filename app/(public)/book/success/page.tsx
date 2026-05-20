@@ -51,6 +51,21 @@ export default function BookSuccessPage() {
 
               <div className="gloss-card p-8 text-left space-y-4">
                 <Row label="Service" value={booking.serviceName} />
+                {booking.selectedAddOns && booking.selectedAddOns.length > 0 && (
+                  <div className="flex justify-between gap-6 border-b border-border pb-3">
+                    <span className="text-label-tech text-foreground-muted">Add-ons</span>
+                    <ul className="text-foreground text-right space-y-1">
+                      {booking.selectedAddOns.map((a) => (
+                        <li key={a.id}>
+                          {a.name}{" "}
+                          <span className="text-foreground-muted">
+                            (+{formatPriceFromCents(a.priceCents)})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <Row label="When" value={formatDateTime(booking.slotStart)} />
                 <Row label="Vehicle" value={booking.vehicleInfo} />
                 <Row

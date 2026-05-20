@@ -13,6 +13,7 @@ import {
   LogOut,
   Menu,
   MessageSquare,
+  Plus,
   Settings,
   Sparkles,
   X,
@@ -26,6 +27,7 @@ import type { ReactNode } from "react";
 const NAV = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { href: "/admin/services", label: "Services", icon: Sparkles },
+  { href: "/admin/add-ons", label: "Add-ons", icon: Plus },
   { href: "/admin/gallery", label: "Gallery", icon: ImageIcon },
   { href: "/admin/bookings", label: "Bookings", icon: CalendarCheck },
   { href: "/admin/reviews", label: "Reviews", icon: MessageSquare },

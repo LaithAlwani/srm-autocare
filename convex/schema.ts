@@ -52,6 +52,23 @@ export default defineSchema({
     order: v.number(),
   }).index("by_order", ["order"]),
 
+  // Add-ons are optional extras the customer can stack onto a service —
+  // each one adds price + duration to the appointment. Available to every
+  // active service (no per-service filtering yet). The Cal.com event type
+  // for each service exposes a range of durations so the total appointment
+  // length is communicated to the calendar and blocks subsequent slots from
+  // overlapping.
+  addOns: defineTable({
+    name: v.string(),
+    description: v.optional(v.string()),
+    priceCents: v.number(),
+    durationMinutes: v.number(),
+    order: v.number(),
+    active: v.boolean(),
+  })
+    .index("by_order", ["order"])
+    .index("by_active_and_order", ["active", "order"]),
+
   reviews: defineTable({
     author: v.string(),
     rating: v.number(),
@@ -74,6 +91,18 @@ export default defineSchema({
     vehicleInfo: v.string(),
     notes: v.optional(v.string()),
     serviceId: v.id("services"),
+    // Add-ons selected at booking time, snapshotted so historical bookings
+    // stay legible even if the admin edits or deletes an add-on later.
+    selectedAddOns: v.optional(
+      v.array(
+        v.object({
+          id: v.id("addOns"),
+          name: v.string(),
+          priceCents: v.number(),
+          durationMinutes: v.number(),
+        }),
+      ),
+    ),
     calComBookingId: v.optional(v.string()),
     slotStart: v.number(),
     slotEnd: v.number(),

@@ -129,6 +129,9 @@ export const createCheckoutPreload = action({
     customerPhone: v.string(),
     vehicleInfo: v.string(),
     notes: v.optional(v.string()),
+    // Add-on IDs selected by the customer. We re-fetch the rows server-side
+    // so the client can't tamper with prices/durations.
+    addOnIds: v.optional(v.array(v.id("addOns"))),
   },
   handler: async (
     ctx,
@@ -138,11 +141,31 @@ export const createCheckoutPreload = action({
     if (!service) throw new Error("Service not found");
     if (!service.active) throw new Error("Service is not bookable");
 
+    // Resolve add-on IDs to authoritative server-side rows so we can trust
+    // the prices + durations. Build snapshots for the booking row.
+    const addOnRows = args.addOnIds && args.addOnIds.length > 0
+      ? await ctx.runQuery(internal.addOns.getMany, { ids: args.addOnIds })
+      : [];
+    const selectedAddOns = addOnRows.map((row) => ({
+      id: row._id,
+      name: row.name,
+      priceCents: row.priceCents,
+      durationMinutes: row.durationMinutes,
+    }));
+    const addOnsTotalCents = selectedAddOns.reduce((sum, a) => sum + a.priceCents, 0);
+    const addOnsTotalMinutes = selectedAddOns.reduce((sum, a) => sum + a.durationMinutes, 0);
+
     // Order numbers must be unique per Moneris store. Short SRM prefix +
     // crypto.randomUUID for collision resistance. Truncated so we stay under
     // Moneris's order_no length limit (50 chars).
     const orderNo = `srm-${crypto.randomUUID()}`.slice(0, 50);
-    const dollars = (service.depositCents / 100).toFixed(2);
+    // Deposit covers the service deposit PLUS the full price of any add-ons
+    // (those are cheap extras that we don't want to take a no-show risk on).
+    const depositCents = service.depositCents + addOnsTotalCents;
+    const dollars = (depositCents / 100).toFixed(2);
+    // Recompute slot end from total duration so it's authoritative server-side.
+    const slotEnd =
+      args.slotStart + (service.durationMinutes + addOnsTotalMinutes) * 60 * 1000;
 
     // Persist the draft FIRST so the webhook can find this booking even if
     // the iframe completes payment before our verify call comes back.
@@ -150,13 +173,14 @@ export const createCheckoutPreload = action({
       monerisOrderId: orderNo,
       serviceId: args.serviceId,
       slotStart: args.slotStart,
-      slotEnd: args.slotEnd,
+      slotEnd,
       customerName: args.customerName,
       customerEmail: args.customerEmail,
       customerPhone: args.customerPhone,
       vehicleInfo: args.vehicleInfo,
       notes: args.notes,
-      depositAmountCents: service.depositCents,
+      depositAmountCents: depositCents,
+      selectedAddOns: selectedAddOns.length > 0 ? selectedAddOns : undefined,
     });
 
     const response = await monerisRequest<{ ticket?: string }>("preload", {
@@ -257,11 +281,19 @@ async function placeCalcomBooking(
       );
       return;
     }
+    // Derive total appointment length from slotEnd - slotStart so Cal.com
+    // blocks subsequent slots for the full add-on-extended duration. Both
+    // booking-row fields are minutes-resolution, so this round-trips cleanly.
+    const totalMinutes = Math.max(
+      1,
+      Math.round((data.booking.slotEnd - data.booking.slotStart) / 60000),
+    );
     const calComBookingId: string = await ctx.runAction(
       internal.calcom.createBookingInternal,
       {
         eventTypeId,
         slotStartISO: new Date(data.booking.slotStart).toISOString(),
+        lengthInMinutes: totalMinutes,
         customerName: data.booking.customerName,
         customerEmail: data.booking.customerEmail,
         customerPhone: data.booking.customerPhone,

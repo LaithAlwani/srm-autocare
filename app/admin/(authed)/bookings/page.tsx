@@ -202,6 +202,25 @@ export default function AdminBookingsPage() {
                     )}
                   </Row>
 
+                  {b.selectedAddOns && b.selectedAddOns.length > 0 && (
+                    <Row label="Add-ons">
+                      <ul className="space-y-1">
+                        {b.selectedAddOns.map((a) => (
+                          <li
+                            key={a.id}
+                            className="text-foreground flex flex-wrap items-baseline gap-x-3 gap-y-0.5"
+                          >
+                            <span>{a.name}</span>
+                            <span className="text-label-tech text-foreground-muted">
+                              +{formatPriceFromCents(a.priceCents)} · +
+                              {a.durationMinutes}m
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </Row>
+                  )}
+
                   <Row label="Deposit">
                     <div className="flex items-baseline gap-3 flex-wrap">
                       <span className="text-foreground font-mono-tech">

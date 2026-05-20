@@ -86,11 +86,17 @@ http.route({
             data.service?.calcomEventTypeId ?? Number(process.env.CALCOM_EVENT_TYPE_ID);
           if (eventTypeId && Number.isFinite(eventTypeId)) {
             try {
+              // Reflect any add-on extensions in the Cal.com booking length.
+              const totalMinutes = Math.max(
+                1,
+                Math.round((data.booking.slotEnd - data.booking.slotStart) / 60000),
+              );
               const calComBookingId: string = await ctx.runAction(
                 internal.calcom.createBookingInternal,
                 {
                   eventTypeId,
                   slotStartISO: new Date(data.booking.slotStart).toISOString(),
+                  lengthInMinutes: totalMinutes,
                   customerName: data.booking.customerName,
                   customerEmail: data.booking.customerEmail,
                   customerPhone: data.booking.customerPhone,
