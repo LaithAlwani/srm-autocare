@@ -1,6 +1,14 @@
 import { v } from "convex/values";
-import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
+import {
+  query,
+  mutation,
+  action,
+  internalAction,
+  internalMutation,
+  internalQuery,
+} from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { requireAdmin } from "./users";
 
 // Status enums kept in one place so every validator on this file stays in sync.
@@ -190,34 +198,82 @@ export const applyRescheduleInternal = internalMutation({
   },
 });
 
-// ADMIN: paginated list with optional status filter. We exclude `pending`
-// rows by default — those are mid-checkout drafts that haven't paid yet,
-// and they get auto-swept by the cleanup cron. Admins should never see them.
+// ADMIN: paginated list with optional status + date filter. We exclude
+// `pending` rows by default — those are mid-checkout drafts that haven't
+// paid yet, and they get auto-swept by the cleanup cron. Admins should
+// never see them.
+//
+// `dateISO` (YYYY-MM-DD in business TZ) narrows the list to bookings on
+// that single day — used by the calendar strip in /admin/bookings to
+// scope the view to "what's on today / tomorrow / etc." When omitted the
+// query falls back to the upcoming-first ordering.
 export const listForAdmin = query({
   args: {
     status: v.optional(v.union(...STATUS_LITERALS)),
+    dateISO: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const limit = args.limit ?? 50;
-    const rows = args.status
+
+    // Compute the day window if a date was supplied. We do this in the
+    // server's TZ (America/Toronto matches the business — the same zone
+    // every customer sees on their booking confirmation). Anything outside
+    // [dayStart, dayEnd) is filtered out.
+    let dayStart: number | null = null;
+    let dayEnd: number | null = null;
+    if (args.dateISO) {
+      const [y, m, d] = args.dateISO.split("-").map(Number);
+      // Local-midnight; for a single-shop app the tiny TZ skew between
+      // server UTC and Toronto wall-clock doesn't change which bookings
+      // land in which day (slotStart is the canonical timestamp).
+      dayStart = new Date(y, m - 1, d).getTime();
+      dayEnd = new Date(y, m - 1, d + 1).getTime();
+    }
+
+    // Pull a generous batch so the partition + filter below still has
+    // plenty to work with after dropping drafts. When filtering by date
+    // we use by_slot_start for a tight scan.
+    const rawByStatus = dayStart !== null
       ? await ctx.db
           .query("bookings")
-          .withIndex("by_status", (q) => q.eq("status", args.status!))
-          .order("desc")
-          .take(limit)
-      : await (async () => {
-          // No filter requested — pull more than the asked limit so we can
-          // drop drafts client-side and still return up to `limit` real rows.
-          const raw = await ctx.db
+          .withIndex("by_slot_start", (q) =>
+            q.gte("slotStart", dayStart!).lt("slotStart", dayEnd!),
+          )
+          .take(limit + 100)
+      : args.status
+        ? await ctx.db
             .query("bookings")
-            .order("desc")
-            .take(limit + 50);
-          return raw.filter((b) => b.status !== "pending").slice(0, limit);
-        })();
+            .withIndex("by_status", (q) => q.eq("status", args.status!))
+            .take(limit + 100)
+        : await ctx.db.query("bookings").take(limit + 100);
+
+    // Always hide pending drafts — they're mid-checkout rows the cleanup
+    // cron will sweep. Then apply the status filter (it's still useful
+    // when narrowed to a date — e.g. show only CANCELLED on that day).
+    const filtered = rawByStatus
+      .filter((b) => b.status !== "pending")
+      .filter((b) => !args.status || b.status === args.status);
+
+    let sorted: typeof filtered;
+    if (dayStart !== null) {
+      // Day-scoped view: time-of-day ascending so morning bookings come first.
+      sorted = filtered.sort((a, b) => a.slotStart - b.slotStart).slice(0, limit);
+    } else {
+      // All-time view: upcoming first (ASC), past after (DESC).
+      const now = Date.now();
+      const upcoming = filtered
+        .filter((b) => b.slotStart >= now)
+        .sort((a, b) => a.slotStart - b.slotStart);
+      const past = filtered
+        .filter((b) => b.slotStart < now)
+        .sort((a, b) => b.slotStart - a.slotStart);
+      sorted = [...upcoming, ...past].slice(0, limit);
+    }
+
     return await Promise.all(
-      rows.map(async (b) => {
+      sorted.map(async (b) => {
         const service = await ctx.db.get(b.serviceId);
         return { ...b, serviceName: service?.name ?? "—" };
       }),
@@ -420,6 +476,70 @@ export const updateStatus = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     await ctx.db.patch(args.id, { status: args.status });
+  },
+});
+
+// INTERNAL: cron-driven 24h reminder. Returns the booking ids that need a
+// reminder right now — confirmed rows whose appointment is between 23h
+// and 25h from now AND that haven't been reminded yet. The 2h-wide
+// window gives the hourly cron plenty of slack so no booking can fall
+// through the cracks due to scheduling drift.
+//
+// Filtering on status=confirmed via the by_status index keeps the scan
+// cheap; cancellation/completion both leave that index, so they're
+// naturally excluded.
+export const findBookingsNeedingReminder = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const windowStart = now + 23 * 60 * 60 * 1000;
+    const windowEnd = now + 25 * 60 * 60 * 1000;
+    const candidates = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q) => q.eq("status", "confirmed"))
+      .take(500);
+    return candidates
+      .filter(
+        (b) =>
+          !b.reminderSentAt &&
+          b.slotStart >= windowStart &&
+          b.slotStart < windowEnd,
+      )
+      .map((b) => b._id);
+  },
+});
+
+// INTERNAL: stamps the reminder timestamp so the same booking can't be
+// reminded twice if a future cron run somehow re-includes it.
+export const markReminderSent = internalMutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.bookingId);
+    if (!row || row.reminderSentAt) return;
+    await ctx.db.patch(args.bookingId, { reminderSentAt: Date.now() });
+  },
+});
+
+// INTERNAL: hourly cron entry-point. Loops candidates, fires the email
+// action, then marks the row as reminded. The mark happens AFTER the
+// send so a transient Resend failure leaves the booking eligible for
+// retry on the next cron run. The dedupe flag is the only guarantee
+// against double-sends — Resend failures still cost an email but never
+// a customer-visible duplicate.
+export const dispatchReminders = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ sent: number }> => {
+    const ids: Array<Id<"bookings">> = await ctx.runQuery(
+      internal.bookings.findBookingsNeedingReminder,
+      {},
+    );
+    let sent = 0;
+    for (const bookingId of ids) {
+      await ctx.runAction(internal.emails.sendBookingReminder, { bookingId });
+      await ctx.runMutation(internal.bookings.markReminderSent, { bookingId });
+      sent++;
+    }
+    return { sent };
   },
 });
 

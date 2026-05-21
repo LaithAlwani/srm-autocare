@@ -29,17 +29,9 @@ export default defineSchema({
     description: v.string(),
     durationMinutes: v.number(),
     priceFromCents: v.number(),
-    // Deprecated — kept optional so legacy rows still validate. New code
-    // always derives the deposit on the fly as DEPOSIT_FRACTION * total via
-    // `computeDepositCents` in lib/booking.ts. Safe to delete the field
-    // (and the leftover values) once you don't mind dropping the column.
-    depositCents: v.optional(v.number()),
     imageStorageId: v.optional(v.id("_storage")),
     icon: v.optional(v.string()),
     badge: v.optional(v.string()),
-    // Deprecated — Cal.com is no longer used. Kept optional so existing
-    // rows still validate; new writes never set it.
-    calcomEventTypeId: v.optional(v.number()),
     order: v.number(),
     active: v.boolean(),
   })
@@ -106,12 +98,14 @@ export default defineSchema({
         }),
       ),
     ),
-    // Deprecated — Cal.com is no longer used. Kept optional for legacy rows;
-    // new code never reads or writes this field.
-    calComBookingId: v.optional(v.string()),
     // Google Calendar event id stamped after a successful push to the
     // connected calendar. Used to PATCH on reschedule and DELETE on cancel.
     googleCalendarEventId: v.optional(v.string()),
+    // Set the first time the 24h reminder email goes out. Used by the
+    // reminder cron to dedupe — a booking with this stamped is never
+    // reminded again, even if the cron's lookup window happens to
+    // include it twice.
+    reminderSentAt: v.optional(v.number()),
     slotStart: v.number(),
     slotEnd: v.number(),
     // The original booked time, only set once the first time the booking is
@@ -132,13 +126,6 @@ export default defineSchema({
     // required for refunds against the original payment.
     squareIdempotencyKey: v.optional(v.string()),
     squarePaymentId: v.optional(v.string()),
-    // Deprecated — kept optional so existing rows from prior processors still
-    // validate. New bookings never write these. Safe to remove alongside a
-    // one-shot delete-fields migration if/when the rows are pruned.
-    monerisOrderId: v.optional(v.string()),
-    monerisTxnId: v.optional(v.string()),
-    stripeSessionId: v.optional(v.string()),
-    stripePaymentIntentId: v.optional(v.string()),
     paymentStatus: v.union(
       v.literal("pending"),
       v.literal("paid"),
@@ -154,7 +141,6 @@ export default defineSchema({
     ),
     createdAt: v.number(),
   })
-    .index("by_email", ["customerEmail"])
     .index("by_status", ["status"])
     .index("by_slot_start", ["slotStart"])
     .index("by_square_idempotency_key", ["squareIdempotencyKey"]),

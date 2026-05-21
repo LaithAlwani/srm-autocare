@@ -25,4 +25,16 @@ crons.interval(
   {},
 );
 
+// Send 24h-before reminder emails. The dispatcher looks for confirmed
+// bookings whose appointment is 23-25h away and that haven't been
+// reminded yet (reminderSentAt flag). Hourly cadence is plenty — the
+// 2-hour-wide window means every booking falls into exactly one cron
+// run, and the flag dedupes anything that overlaps.
+crons.interval(
+  "send 24h booking reminders",
+  { hours: 1 },
+  internal.bookings.dispatchReminders,
+  {},
+);
+
 export default crons;

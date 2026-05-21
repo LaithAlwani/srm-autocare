@@ -6,11 +6,12 @@ import { Ban, CalendarClock, History, Mail, Phone, Undo2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Eyebrow } from "@/components/ui/eyebrow";
-import { formatDateTime, formatPriceFromCents } from "@/lib/format";
+import { formatDateTime, formatDuration, formatPriceFromCents } from "@/lib/format";
 import { RelativeTime } from "@/components/relative-time";
 import { RescheduleModal } from "@/components/admin/reschedule-modal";
 import { ConfirmModal } from "@/components/admin/confirm-modal";
 import { RefundModal } from "@/components/admin/refund-modal";
+import { DateScroller } from "@/components/ui/date-scroller";
 
 // Note: `pending` deliberately excluded — those rows are mid-checkout drafts
 // that listForAdmin already filters out. The admin only ever sees real bookings.
@@ -71,12 +72,28 @@ function paymentLabel(payment: string): string {
   return payment === "partially_refunded" ? "PARTIAL REFUND" : payment.toUpperCase();
 }
 
+// Today as YYYY-MM-DD in the browser's local zone. Used as the initial
+// date for the calendar strip + the lower bound on backward scrolling
+// (admins can still pick past days to audit completed/cancelled bookings
+// — we just default to today).
+function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export default function AdminBookingsPage() {
   const [filter, setFilter] = useState<Filter>("all");
-  const bookings = useQuery(
-    api.bookings.listForAdmin,
-    filter === "all" ? { limit: 100 } : { status: filter, limit: 100 },
-  );
+  // Date scope for the bookings list. Defaults to today so the admin
+  // immediately sees what's on the calendar today. "all" hides the
+  // date filter entirely and shows the upcoming-first list.
+  const [scope, setScope] = useState<"date" | "all">("date");
+  const [date, setDate] = useState<string>(() => todayISO());
+
+  const bookings = useQuery(api.bookings.listForAdmin, {
+    ...(filter === "all" ? {} : { status: filter }),
+    ...(scope === "date" ? { dateISO: date } : {}),
+    limit: 100,
+  });
   const updateStatus = useMutation(api.bookings.updateStatus);
   const adminCancel = useAction(api.bookings.adminCancel);
   const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
@@ -104,6 +121,47 @@ export default function AdminBookingsPage() {
       <Eyebrow className="mb-3">Operations</Eyebrow>
       <h1 className="text-headline-lg uppercase mb-8">Bookings</h1>
 
+      {/* Calendar strip — defaults to today. The "All upcoming" pill
+          clears the date scope entirely and shows the date-agnostic
+          upcoming-first list. */}
+      <div className="gloss-card p-4 md:p-6 mb-6 space-y-4">
+        <DateScroller
+          date={date}
+          onChange={(d) => {
+            setScope("date");
+            setDate(d);
+          }}
+          ariaLabel="Pick a date to view bookings"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() =>
+              scope === "date" ? setScope("all") : setDate(todayISO())
+            }
+            className="text-label-tech text-foreground-muted hover:text-foreground transition-colors"
+          >
+            {scope === "date" ? "Show all upcoming →" : "← Back to today"}
+          </button>
+          {scope === "date" && (
+            <span className="text-label-tech text-foreground-muted">
+              Showing bookings on{" "}
+              <span className="text-foreground">
+                {new Date(
+                  Number(date.slice(0, 4)),
+                  Number(date.slice(5, 7)) - 1,
+                  Number(date.slice(8, 10)),
+                ).toLocaleDateString("en-CA", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })}
+              </span>
+            </span>
+          )}
+        </div>
+      </div>
+
       <div className="flex gap-2 mb-6 flex-wrap">
         {FILTERS.map((f) => (
           <button
@@ -124,7 +182,7 @@ export default function AdminBookingsPage() {
         <p className="text-foreground-muted">Loading...</p>
       ) : bookings.length === 0 ? (
         <div className="gloss-card p-12 text-center text-foreground-muted">
-          No bookings match this filter.
+          {scope === "date" ? "No bookings on this date." : "No bookings match this filter."}
         </div>
       ) : (
         <div className="space-y-3">
@@ -135,15 +193,21 @@ export default function AdminBookingsPage() {
                 key={b._id}
                 className={`gloss-card ${statusAccent(b.status)} ${isCancelled ? "opacity-70" : ""}`}
               >
-                {/* HERO — when + service + payment chip */}
+                {/* HERO — when + duration + service + payment chip */}
                 <div className="p-6 md:p-8 flex flex-col md:flex-row md:items-start md:justify-between gap-4 border-b border-border">
                   <div className="min-w-0">
                     <div
-                      className={`text-label-tech text-primary mb-3 ${
+                      className={`text-label-tech text-primary mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 ${
                         isCancelled ? "line-through text-foreground-muted" : ""
                       }`}
                     >
-                      {formatDateTime(b.slotStart)}
+                      <span>{formatDateTime(b.slotStart)}</span>
+                      <span className="text-foreground-muted">
+                        ·{" "}
+                        {formatDuration(
+                          Math.max(1, Math.round((b.slotEnd - b.slotStart) / 60000)),
+                        )}
+                      </span>
                     </div>
                     <h3 className="text-headline-md text-foreground uppercase tracking-tight">
                       {b.serviceName}

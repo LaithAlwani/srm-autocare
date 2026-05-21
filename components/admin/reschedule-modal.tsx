@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import { useAction, useQuery } from "convex/react";
-import { Calendar, Loader2, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
+import { DateScroller } from "@/components/ui/date-scroller";
 import { formatDateTime } from "@/lib/format";
 import { useModalTransition } from "@/lib/use-modal-transition";
 
@@ -127,18 +128,16 @@ export function RescheduleModal({
 
           <div>
             <label className="text-label-tech text-foreground-muted mb-2 block">
-              <Calendar size={12} className="inline mr-1" />
               New date
             </label>
-            <input
-              type="date"
-              value={date}
-              min={new Date().toISOString().slice(0, 10)}
-              onChange={(e) => {
+            <DateScroller
+              date={date}
+              minDate={new Date().toISOString().slice(0, 10)}
+              onChange={(d) => {
                 setSelected(null);
-                setDate(e.target.value);
+                setDate(d);
               }}
-              className="w-full bg-surface-container-low px-4 py-3 text-body-md text-foreground border-0 border-b border-chrome focus:outline-none focus:border-primary"
+              ariaLabel="Pick a new date"
             />
           </div>
 
@@ -146,36 +145,44 @@ export function RescheduleModal({
             <label className="text-label-tech text-foreground-muted mb-2 block">
               Available times
             </label>
-            {slotLoading ? (
-              <div className="flex items-center gap-2 text-foreground-muted py-6">
-                <Loader2 size={16} className="animate-spin" /> Loading slots...
-              </div>
-            ) : slots.length === 0 ? (
-              <p className="text-foreground-muted text-body-md py-4">
-                No slots available on this date — try another.
-              </p>
-            ) : (
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                {slots.map((iso) => {
-                  const active = selected === iso;
-                  return (
-                    <button
-                      key={iso}
-                      type="button"
-                      onClick={() => setSelected(iso)}
-                      className={`gloss-card p-3 text-label-tech ${
-                        active ? "border-primary glow-blue-soft text-primary" : ""
-                      }`}
-                    >
-                      {new Date(iso).toLocaleTimeString("en-CA", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                      })}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+            {/* Fixed-height container so the modal doesn't jump as the
+                slot count changes between dates. Internal overflow-y
+                scrolls when a day has unusually many slots. */}
+            <div className="h-60 overflow-y-auto pr-1">
+              {slotLoading ? (
+                <div className="flex items-center gap-2 text-foreground-muted py-6">
+                  <Loader2 size={16} className="animate-spin" /> Loading slots...
+                </div>
+              ) : slots.length === 0 ? (
+                <p className="text-foreground-muted text-body-md py-4">
+                  No slots available on this date — try another.
+                </p>
+              ) : (
+                <div
+                  key={date}
+                  className="grid grid-cols-3 sm:grid-cols-4 gap-2 animate-slide-up"
+                >
+                  {slots.map((iso) => {
+                    const active = selected === iso;
+                    return (
+                      <button
+                        key={iso}
+                        type="button"
+                        onClick={() => setSelected(iso)}
+                        className={`gloss-card p-3 text-label-tech transition duration-200 ${
+                          active ? "border-primary glow-blue-soft text-primary" : ""
+                        }`}
+                      >
+                        {new Date(iso).toLocaleTimeString("en-CA", {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
 
           <div>

@@ -251,6 +251,55 @@ export const sendBookingRescheduled = internalAction({
   },
 });
 
+// INTERNAL: 24h reminder fired by the hourly reminder cron. Body is
+// shorter than the confirmation — the customer's already booked, this
+// is just a nudge with the date, address, and a "reply if you need to
+// change anything" footer. The cron stamps reminderSentAt after a
+// successful send so a booking is never reminded twice.
+export const sendBookingReminder = internalAction({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    try {
+      const resend = loadResend();
+      if (!resend) return;
+      const ctxData = await loadBookingContext(ctx, args.bookingId);
+      if (!ctxData) return;
+      const { booking, service } = ctxData;
+      const address = `${siteConfig.address.street}, ${siteConfig.address.city}, ${siteConfig.address.state} ${siteConfig.address.zip}`;
+
+      const body = `
+        <h1 style="margin:0 0 8px;color:#f5f5f7;font-size:24px;font-weight:600;">See you tomorrow</h1>
+        <p style="margin:0 0 16px;color:#a1a1aa;font-size:14px;line-height:1.6;">
+          Just a quick reminder — your <strong style="color:#f5f5f7;">${escapeHtml(service?.name ?? "appointment")}</strong>
+          is tomorrow at <strong style="color:#f5f5f7;">${escapeHtml(formatDateTime(booking.slotStart))}</strong>.
+        </p>
+        ${summaryBlock({
+          serviceName: service?.name ?? "Service",
+          slotStartLabel: formatDateTime(booking.slotStart),
+          vehicleInfo: booking.vehicleInfo,
+          addOns: booking.selectedAddOns,
+        })}
+        <div style="margin-top:24px;padding:16px;border:1px solid #26262e;background:#0f0f14;">
+          <div style="font-size:11px;letter-spacing:0.1em;color:#6b6b73;text-transform:uppercase;margin-bottom:6px;">Where</div>
+          <div style="color:#f5f5f7;font-size:14px;line-height:1.6;">${escapeHtml(address)}</div>
+        </div>
+        <p style="margin:24px 0 0;color:#a1a1aa;font-size:13px;line-height:1.6;">
+          Need to reschedule or running late? Just reply to this email and we'll sort it out.
+        </p>
+      `;
+
+      await resend.client.emails.send({
+        from: resend.from,
+        to: booking.customerEmail,
+        subject: `Reminder: your appointment tomorrow at ${formatDateTime(booking.slotStart)}`,
+        html: wrap(body, `Your ${service?.name ?? "appointment"} is tomorrow.`),
+      });
+    } catch (err) {
+      console.error("sendBookingReminder failed", err);
+    }
+  },
+});
+
 // INTERNAL: new-booking notification fired to OWNER_EMAIL so the shop sees
 // fresh bookings without refreshing /admin/bookings. Different body shape
 // from the customer email — denser, geared toward "here's the customer

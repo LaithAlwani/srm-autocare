@@ -6,10 +6,7 @@ import { useAction, useQuery } from "convex/react";
 import {
   ArrowLeft,
   ArrowRight,
-  Calendar,
   Check,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Loader2,
 } from "lucide-react";
@@ -21,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { HeroMedia } from "@/components/hero-media";
 import { heroMedia } from "@/config/media";
 import { SquarePaymentForm } from "@/components/square-payment-form";
+import { DateScroller } from "@/components/ui/date-scroller";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
 import { computeDepositCents } from "@/lib/booking";
 import { resolveIcon } from "@/lib/icons";
@@ -42,25 +40,6 @@ const STEP_LABELS: Record<Step, string> = {
 function todayISO(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function shiftDateISO(iso: string, days: number): string {
-  // Parse as local midnight so day arithmetic doesn't accidentally cross a
-  // timezone boundary and land on the wrong calendar day.
-  const [y, m, d] = iso.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + days);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-}
-
-function formatLongDate(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString("en-CA", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 export default function BookPage() {
@@ -480,8 +459,8 @@ export default function BookPage() {
             {step === 2 && selectedService && (
               <div key="step-2" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Pick a time</h2>
-                <div className="gloss-card p-4 md:p-6 mb-8 flex flex-col md:flex-row md:items-center gap-4">
-                  <DatePicker
+                <div className="gloss-card p-4 md:p-6 mb-8 space-y-4">
+                  <DateScroller
                     date={date}
                     minDate={minDate}
                     onChange={(d) => {
@@ -489,7 +468,7 @@ export default function BookPage() {
                       setDate(d);
                     }}
                   />
-                  <div className="md:ml-auto text-label-tech text-foreground-muted">
+                  <div className="text-label-tech text-foreground-muted text-center md:text-left">
                     {selectedService.name} • {formatDuration(totalDurationMinutes)}
                     {selectedAddOns.length > 0 && (
                       <> • {selectedAddOns.length} add-on{selectedAddOns.length === 1 ? "" : "s"}</>
@@ -504,7 +483,14 @@ export default function BookPage() {
                 ) : slots.length === 0 ? (
                   <p className="text-foreground-muted">No slots available on this date — try another.</p>
                 ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                  // `key={date}` makes React remount the grid when the
+                  // customer switches to another day, which lets the
+                  // animate-slide-up keyframe re-fire so the new slot
+                  // list fades up instead of snapping.
+                  <div
+                    key={date}
+                    className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 animate-slide-up"
+                  >
                     {slots.map((iso) => {
                       const active = slotStartISO === iso;
                       return (
@@ -512,7 +498,7 @@ export default function BookPage() {
                           key={iso}
                           type="button"
                           onClick={() => setSlotStartISO(iso)}
-                          className={`gloss-card p-4 text-label-tech ${
+                          className={`gloss-card p-4 text-label-tech transition duration-200 ${
                             active ? "border-primary glow-blue-soft text-primary" : ""
                           }`}
                         >
@@ -774,88 +760,6 @@ export default function BookPage() {
           </div>
         </Container>
       </section>
-    </div>
-  );
-}
-
-// Bigger, more tappable date picker — arrow buttons either side of a single
-// big "calendar icon + date" button that opens the browser's native date
-// picker. Going back is disabled once we hit today so customers can't ever
-// pick a past day.
-function DatePicker({
-  date,
-  minDate,
-  onChange,
-}: {
-  date: string;
-  minDate: string;
-  onChange: (iso: string) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const canGoBack = date > minDate;
-
-  function shift(days: number) {
-    const next = shiftDateISO(date, days);
-    if (next < minDate) return;
-    onChange(next);
-  }
-
-  function openPicker() {
-    const el = inputRef.current;
-    if (!el) return;
-    // Modern browsers expose showPicker(); fall back to focusing the input.
-    if (typeof el.showPicker === "function") {
-      try {
-        el.showPicker();
-        return;
-      } catch {
-        /* Some browsers throw if not triggered by direct user input — fall through. */
-      }
-    }
-    el.focus();
-    el.click();
-  }
-
-  return (
-    <div className="flex items-stretch gap-2 w-full md:w-auto">
-      <button
-        type="button"
-        onClick={() => shift(-1)}
-        disabled={!canGoBack}
-        aria-label="Previous day"
-        className="w-12 flex items-center justify-center border border-border text-foreground-muted hover:text-foreground hover:border-chrome transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-      >
-        <ChevronLeft size={18} />
-      </button>
-
-      <button
-        type="button"
-        onClick={openPicker}
-        className="flex-1 md:flex-none flex items-center justify-center gap-3 px-5 py-3 bg-surface-container border border-primary text-foreground hover:bg-surface-container-high transition-colors glow-blue-soft"
-      >
-        <Calendar size={18} className="text-primary shrink-0" />
-        <span className="text-body-md whitespace-nowrap">{formatLongDate(date)}</span>
-      </button>
-
-      <button
-        type="button"
-        onClick={() => shift(1)}
-        aria-label="Next day"
-        className="w-12 flex items-center justify-center border border-border text-foreground-muted hover:text-foreground hover:border-chrome transition-colors"
-      >
-        <ChevronRight size={18} />
-      </button>
-
-      {/* Native input — visually hidden but still focusable / pickable. */}
-      <input
-        ref={inputRef}
-        type="date"
-        value={date}
-        min={minDate}
-        onChange={(e) => e.target.value && onChange(e.target.value)}
-        className="sr-only"
-        aria-label="Pick a date"
-      />
     </div>
   );
 }

@@ -15,6 +15,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
+import { DateScroller } from "@/components/ui/date-scroller";
 import {
   type BusinessHours,
   type DaySchedule,
@@ -71,8 +72,11 @@ function BusinessHoursSection() {
     if (hours) setDraft(hours);
   }, [hours]);
 
-  const newBlackoutId = useMemo(() => `bo-${Date.now()}`, [savedAt]);
-  const [newBlackout, setNewBlackout] = useState("");
+  // Default to today so the DateScroller has a concrete date to render.
+  // The owner clicks the icon to open the native picker for far jumps
+  // (holidays months out), or uses the arrows for nearby dates.
+  const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [newBlackout, setNewBlackout] = useState(todayISO);
 
   async function save() {
     if (!draft) return;
@@ -212,13 +216,12 @@ function BusinessHoursSection() {
             </span>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          <input
-            key={newBlackoutId}
-            type="date"
-            value={newBlackout}
-            onChange={(e) => setNewBlackout(e.target.value)}
-            className="bg-surface-container px-4 py-2 text-body-md text-foreground border-0 border-b border-chrome focus:outline-none focus:border-primary"
+        <div className="flex flex-wrap items-center gap-2">
+          <DateScroller
+            date={newBlackout}
+            minDate={todayISO}
+            onChange={setNewBlackout}
+            ariaLabel="Pick a blackout date"
           />
           <Button
             variant="secondary"
@@ -230,7 +233,7 @@ function BusinessHoursSection() {
                   ? { ...cur, blackoutDates: [...cur.blackoutDates, newBlackout].sort() }
                   : cur,
               );
-              setNewBlackout("");
+              setNewBlackout(todayISO);
             }}
           >
             <Plus size={12} /> Add
