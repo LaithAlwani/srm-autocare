@@ -239,58 +239,32 @@ export const confirmAndCharge = action({
     });
 
     if (isNew) {
-      await placeCalcomBooking(ctx, id);
+      await dispatchPostBooking(ctx, id);
     }
 
     return { ok: true, bookingId: id };
   },
 });
 
-// Helper: fires the Cal.com booking once we know payment is confirmed.
-// Failures are logged but never re-thrown — payment has already been
-// captured at this point and admin can reconcile manually if Cal.com is down.
-async function placeCalcomBooking(
-  ctx: { runQuery: any; runAction: any; runMutation: any },
+// Helper: fires every side effect that follows a freshly-confirmed
+// booking — customer email, owner notification, and a best-effort
+// Google Calendar push. All three run in parallel and any individual
+// failure is swallowed (logged) so the payment-cleared response back
+// to the customer is never blocked by a downstream hiccup.
+async function dispatchPostBooking(
+  ctx: { runAction: any; runMutation: any },
   bookingId: Id<"bookings">,
 ): Promise<void> {
-  try {
-    const data = await ctx.runQuery(internal.bookings.getForCalcomDispatch, {
+  const [, , gcalResult] = await Promise.allSettled([
+    ctx.runAction(internal.emails.sendBookingConfirmation, { bookingId }),
+    ctx.runAction(internal.emails.sendOwnerBookingNotification, { bookingId }),
+    ctx.runAction(internal.googleCalendar.createEventInternal, { bookingId }),
+  ]);
+  if (gcalResult.status === "fulfilled" && typeof gcalResult.value === "string") {
+    await ctx.runMutation(internal.bookings.setGoogleCalendarEventId, {
       bookingId,
+      googleCalendarEventId: gcalResult.value,
     });
-    if (!data) return;
-    const eventTypeId =
-      data.service?.calcomEventTypeId ?? Number(process.env.CALCOM_EVENT_TYPE_ID);
-    if (!eventTypeId || !Number.isFinite(eventTypeId)) {
-      console.error(
-        `No Cal.com event type configured for service ${data.booking.serviceId} — booking saved without calendar entry`,
-      );
-      return;
-    }
-    // Derive total appointment length from slotEnd - slotStart so Cal.com
-    // blocks subsequent slots for the full add-on-extended duration.
-    const totalMinutes = Math.max(
-      1,
-      Math.round((data.booking.slotEnd - data.booking.slotStart) / 60000),
-    );
-    const calComBookingId: string = await ctx.runAction(
-      internal.calcom.createBookingInternal,
-      {
-        eventTypeId,
-        slotStartISO: new Date(data.booking.slotStart).toISOString(),
-        lengthInMinutes: totalMinutes,
-        customerName: data.booking.customerName,
-        customerEmail: data.booking.customerEmail,
-        customerPhone: data.booking.customerPhone,
-        vehicleInfo: data.booking.vehicleInfo,
-        notes: data.booking.notes,
-      },
-    );
-    await ctx.runMutation(internal.bookings.setCalcomBookingId, {
-      bookingId,
-      calComBookingId,
-    });
-  } catch (err) {
-    console.error("Cal.com booking failed (booking is paid; admin can reconcile)", err);
   }
 }
 

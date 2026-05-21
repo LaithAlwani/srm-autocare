@@ -56,9 +56,10 @@ export const getInternalBySquarePaymentId = internalQuery({
   },
 });
 
-// INTERNAL: bundle a booking + its service for the post-payment flow, which
-// needs both to call Cal.com.
-export const getForCalcomDispatch = internalQuery({
+// INTERNAL: bundle a booking + its service for any post-state-change
+// dispatch — confirmation email, Google Calendar push, reschedule email,
+// cancellation email.
+export const getForDispatch = internalQuery({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId);
@@ -122,7 +123,7 @@ export const createDraft = internalMutation({
 // INTERNAL: promote a draft booking to confirmed/paid once Square confirms
 // payment. Idempotent — running twice (once from confirmAndCharge, once from
 // the payment.updated webhook) is safe; only the first call returns
-// isNew=true so the caller can gate Cal.com side effects.
+// isNew=true so the caller can gate post-payment side effects.
 export const confirmFromPayment = internalMutation({
   args: {
     idempotencyKey: v.string(),
@@ -151,81 +152,41 @@ export const confirmFromPayment = internalMutation({
   },
 });
 
-// INTERNAL: stamp the Cal.com booking id onto a row after we've placed it.
-export const setCalcomBookingId = internalMutation({
-  args: { bookingId: v.id("bookings"), calComBookingId: v.string() },
+// INTERNAL: stamp the Google Calendar event id onto a booking after the
+// dispatch helper has successfully pushed it. Used so subsequent
+// reschedule / cancel actions know which event to PATCH or DELETE.
+export const setGoogleCalendarEventId = internalMutation({
+  args: { bookingId: v.id("bookings"), googleCalendarEventId: v.string() },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.bookingId, { calComBookingId: args.calComBookingId });
+    await ctx.db.patch(args.bookingId, {
+      googleCalendarEventId: args.googleCalendarEventId,
+    });
   },
 });
 
-// INTERNAL: lookup helper used by the Cal.com webhook + reschedule action.
-export const getByCalcomUid = internalQuery({
-  args: { calComBookingId: v.string() },
-  handler: async (ctx, args) => {
-    const booking = await ctx.db
-      .query("bookings")
-      .withIndex("by_calcom_uid", (q) =>
-        q.eq("calComBookingId", args.calComBookingId),
-      )
-      .unique();
-    if (!booking) return null;
-    const service = await ctx.db.get(booking.serviceId);
-    return { ...booking, serviceName: service?.name ?? "Service" };
-  },
-});
-
-// INTERNAL: applied when Cal.com fires BOOKING_RESCHEDULED. The reschedule
-// webhook payload references the OLD booking via `rescheduleUid` and ships a
-// brand-new `uid` for the new booking — we swap the row's calComBookingId
-// over and patch the new times.
-export const applyReschedule = internalMutation({
+// INTERNAL: apply a reschedule in-place. Captures original slot times on
+// the first reschedule so the admin UI can still show "originally booked
+// for X". Idempotent against same-value patches.
+export const applyRescheduleInternal = internalMutation({
   args: {
-    oldUid: v.string(),
-    newUid: v.string(),
-    slotStart: v.number(),
-    slotEnd: v.number(),
+    bookingId: v.id("bookings"),
+    newSlotStart: v.number(),
+    newSlotEnd: v.number(),
   },
   handler: async (ctx, args) => {
-    const booking = await ctx.db
-      .query("bookings")
-      .withIndex("by_calcom_uid", (q) => q.eq("calComBookingId", args.oldUid))
-      .unique();
-    if (!booking) {
-      console.warn(`Reschedule webhook: no booking with calcom uid ${args.oldUid}`);
-      return null;
-    }
-    const previous = { slotStart: booking.slotStart, slotEnd: booking.slotEnd };
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+    const previousSlotStart = booking.slotStart;
     const captureOriginal = booking.originalSlotStart === undefined;
-    await ctx.db.patch(booking._id, {
-      calComBookingId: args.newUid,
-      slotStart: args.slotStart,
-      slotEnd: args.slotEnd,
+    await ctx.db.patch(args.bookingId, {
+      slotStart: args.newSlotStart,
+      slotEnd: args.newSlotEnd,
       rescheduledAt: Date.now(),
       ...(captureOriginal
         ? { originalSlotStart: booking.slotStart, originalSlotEnd: booking.slotEnd }
         : {}),
     });
-    return { bookingId: booking._id, previous };
-  },
-});
-
-// INTERNAL: applied when Cal.com fires BOOKING_CANCELLED. Sets the status
-// without deleting the row so we keep the audit trail (deposit info, etc.).
-export const markCancelled = internalMutation({
-  args: { uid: v.string() },
-  handler: async (ctx, args) => {
-    const booking = await ctx.db
-      .query("bookings")
-      .withIndex("by_calcom_uid", (q) => q.eq("calComBookingId", args.uid))
-      .unique();
-    if (!booking) {
-      console.warn(`Cancel webhook: no booking with calcom uid ${args.uid}`);
-      return null;
-    }
-    if (booking.status === "cancelled") return booking._id;
-    await ctx.db.patch(booking._id, { status: "cancelled" });
-    return booking._id;
+    return { previousSlotStart };
   },
 });
 
@@ -264,9 +225,10 @@ export const listForAdmin = query({
   },
 });
 
-// ADMIN: kick off a reschedule from /admin/bookings. Calls Cal.com's reschedule
-// API; the BOOKING_RESCHEDULED webhook fires back to /calcom/webhook and
-// updates our DB through applyReschedule. Cal.com handles the customer email.
+// ADMIN: kick off a reschedule from /admin/bookings. Patches the booking
+// row in place, then fires the customer email + Google Calendar update.
+// Side effects are best-effort — the row state change is what's
+// authoritative.
 export const adminReschedule = action({
   args: {
     bookingId: v.id("bookings"),
@@ -282,14 +244,41 @@ export const adminReschedule = action({
       id: args.bookingId,
     });
     if (!booking) throw new Error("Booking not found");
-    if (!booking.calComBookingId) {
-      throw new Error("This booking has no Cal.com entry to reschedule");
+    if (booking.status === "cancelled") {
+      throw new Error("Cancelled bookings can't be rescheduled");
     }
-    await ctx.runAction(internal.calcom.rescheduleBookingInternal, {
-      bookingUid: booking.calComBookingId,
-      slotStartISO: args.slotStartISO,
-      reason: args.reason,
-    });
+
+    const newSlotStart = new Date(args.slotStartISO).getTime();
+    if (!Number.isFinite(newSlotStart)) {
+      throw new Error("Invalid slotStartISO");
+    }
+    // Preserve the existing appointment length (service + any add-ons).
+    const lengthMs = booking.slotEnd - booking.slotStart;
+    const newSlotEnd = newSlotStart + lengthMs;
+
+    const { previousSlotStart } = await ctx.runMutation(
+      internal.bookings.applyRescheduleInternal,
+      {
+        bookingId: args.bookingId,
+        newSlotStart,
+        newSlotEnd,
+      },
+    );
+
+    // Email + GCal in parallel, ignoring individual failures.
+    await Promise.allSettled([
+      ctx.runAction(internal.emails.sendBookingRescheduled, {
+        bookingId: args.bookingId,
+        previousSlotStart,
+      }),
+      booking.googleCalendarEventId
+        ? ctx.runAction(internal.googleCalendar.updateEventInternal, {
+            googleEventId: booking.googleCalendarEventId,
+            bookingId: args.bookingId,
+          })
+        : Promise.resolve(),
+    ]);
+
     return { ok: true };
   },
 });
@@ -371,9 +360,9 @@ export const adminRefund = action({
   },
 });
 
-// ADMIN: cancel a booking — calls Cal.com to cancel its calendar entry first,
-// then flips our row's status. Cal.com webhook will also fire BOOKING_CANCELLED
-// but markCancelled is idempotent.
+// ADMIN: cancel a booking. Flips the row's status, then fires the
+// cancellation email + best-effort Google Calendar deletion.
+// Idempotent on already-cancelled rows.
 export const adminCancel = action({
   args: {
     bookingId: v.id("bookings"),
@@ -390,26 +379,29 @@ export const adminCancel = action({
     if (!booking) throw new Error("Booking not found");
     if (booking.status === "cancelled") return { ok: true };
 
-    if (booking.calComBookingId) {
-      await ctx.runAction(internal.calcom.cancelBookingInternal, {
-        bookingUid: booking.calComBookingId,
-        reason: args.reason,
-      });
-    }
-    await ctx.runMutation(internal.bookings.markCancelled, {
-      uid: booking.calComBookingId ?? "",
+    await ctx.runMutation(internal.bookings.forceStatus, {
+      bookingId: args.bookingId,
+      status: "cancelled",
     });
-    if (!booking.calComBookingId) {
-      await ctx.runMutation(internal.bookings.forceStatus, {
+
+    await Promise.allSettled([
+      ctx.runAction(internal.emails.sendBookingCancelled, {
         bookingId: args.bookingId,
-        status: "cancelled",
-      });
-    }
+        refundedCents: booking.refundedAmountCents,
+        reason: args.reason,
+      }),
+      booking.googleCalendarEventId
+        ? ctx.runAction(internal.googleCalendar.deleteEventInternal, {
+            googleEventId: booking.googleCalendarEventId,
+          })
+        : Promise.resolve(),
+    ]);
+
     return { ok: true };
   },
 });
 
-// INTERNAL: status setter that doesn't require a calcom uid lookup.
+// INTERNAL: status setter when callers already have the bookingId in hand.
 export const forceStatus = internalMutation({
   args: {
     bookingId: v.id("bookings"),

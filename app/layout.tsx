@@ -65,7 +65,6 @@ export default function RootLayout({
           )}
           <link rel="dns-prefetch" href="https://web.squarecdn.com" />
           <link rel="dns-prefetch" href="https://sandbox.web.squarecdn.com" />
-          <link rel="dns-prefetch" href="https://api.cal.com" />
         </head>
         <body className="min-h-screen flex flex-col bg-surface text-foreground antialiased">
           <Providers>{children}</Providers>

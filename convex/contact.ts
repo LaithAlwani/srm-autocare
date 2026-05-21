@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { Resend } from "resend";
 import { action } from "./_generated/server";
+import { siteConfig } from "../config/site";
 
 // PUBLIC: emails the owner with a contact-form submission. No DB row.
 // Throws if Resend isn't configured so the form shows an error instead of
@@ -19,8 +20,9 @@ export const sendInquiry = action({
     if (!ownerEmail) throw new Error("OWNER_EMAIL is not set");
 
     const resend = new Resend(apiKey);
+    const address = process.env.AUTH_FROM_EMAIL ?? "noreply@srm-autocare.com";
     await resend.emails.send({
-      from: process.env.AUTH_FROM_EMAIL ?? "noreply@srm-autocare.com",
+      from: `${siteConfig.shortName} ${siteConfig.name} <${address}>`,
       to: ownerEmail,
       replyTo: args.email,
       subject: `New inquiry from ${args.name}`,

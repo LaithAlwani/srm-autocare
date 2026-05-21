@@ -93,41 +93,26 @@ http.route({
         squarePaymentId: payment.id,
         amountCents,
       });
-      // Webhook firing first (rare) means we still need to schedule Cal.com.
+      // Webhook firing first (rare tab-close case) — still need to send
+      // the customer + owner emails and push to Google Calendar. Mirrors
+      // the dispatchPostBooking helper in square.ts.
       if (result.isNew) {
-        const data = await ctx.runQuery(internal.bookings.getForCalcomDispatch, {
-          bookingId: result.id,
-        });
-        if (data) {
-          const eventTypeId =
-            data.service?.calcomEventTypeId ?? Number(process.env.CALCOM_EVENT_TYPE_ID);
-          if (eventTypeId && Number.isFinite(eventTypeId)) {
-            try {
-              const totalMinutes = Math.max(
-                1,
-                Math.round((data.booking.slotEnd - data.booking.slotStart) / 60000),
-              );
-              const calComBookingId: string = await ctx.runAction(
-                internal.calcom.createBookingInternal,
-                {
-                  eventTypeId,
-                  slotStartISO: new Date(data.booking.slotStart).toISOString(),
-                  lengthInMinutes: totalMinutes,
-                  customerName: data.booking.customerName,
-                  customerEmail: data.booking.customerEmail,
-                  customerPhone: data.booking.customerPhone,
-                  vehicleInfo: data.booking.vehicleInfo,
-                  notes: data.booking.notes,
-                },
-              );
-              await ctx.runMutation(internal.bookings.setCalcomBookingId, {
-                bookingId: result.id,
-                calComBookingId,
-              });
-            } catch (err) {
-              console.error("Cal.com booking failed from Square webhook", err);
-            }
-          }
+        const [, , gcal] = await Promise.allSettled([
+          ctx.runAction(internal.emails.sendBookingConfirmation, {
+            bookingId: result.id,
+          }),
+          ctx.runAction(internal.emails.sendOwnerBookingNotification, {
+            bookingId: result.id,
+          }),
+          ctx.runAction(internal.googleCalendar.createEventInternal, {
+            bookingId: result.id,
+          }),
+        ]);
+        if (gcal.status === "fulfilled" && typeof gcal.value === "string") {
+          await ctx.runMutation(internal.bookings.setGoogleCalendarEventId, {
+            bookingId: result.id,
+            googleCalendarEventId: gcal.value,
+          });
         }
       }
       return new Response("ok", { status: 200 });
@@ -168,94 +153,44 @@ http.route({
   }),
 });
 
-// Cal.com webhook: reflects rescheduling and cancellation made directly from
-// the customer's confirmation email back into our DB so /admin/bookings stays
-// authoritative. Configure in Cal.com → Settings → Developer → Webhooks:
-//   URL    https://<convex-site-url>/calcom/webhook
-//   Events BOOKING_RESCHEDULED, BOOKING_CANCELLED
-//   Secret stored as CALCOM_WEBHOOK_SECRET on the Convex deployment
+// Google OAuth callback: lands here after the owner consents on Google's
+// screen. Exchanges the auth code for tokens (stored in Convex), then
+// redirects back to /admin/settings with a status flag for the toast UI.
+//
+// Whitelist this URL in the GCP Console under OAuth client credentials.
 http.route({
-  path: "/calcom/webhook",
-  method: "POST",
+  path: "/oauth/google/callback",
+  method: "GET",
   handler: httpAction(async (ctx, req) => {
-    const secret = process.env.CALCOM_WEBHOOK_SECRET;
-    if (!secret) return new Response("Missing CALCOM_WEBHOOK_SECRET", { status: 500 });
+    const url = new URL(req.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const error = url.searchParams.get("error");
+    const siteUrl = process.env.SITE_URL ?? "";
+    const redirectBase = siteUrl ? `${siteUrl}/admin/settings` : "/admin/settings";
 
-    const sig = req.headers.get("x-cal-signature-256");
-    if (!sig) return new Response("Missing signature", { status: 400 });
-
-    const body = await req.text();
-    const expected = await hmacSha256Hex(secret, body);
-    if (!timingSafeEqual(expected, sig)) {
-      return new Response("Bad signature", { status: 400 });
+    if (error) {
+      return Response.redirect(
+        `${redirectBase}?googleError=${encodeURIComponent(error)}`,
+        302,
+      );
+    }
+    if (!code || !state) {
+      return Response.redirect(`${redirectBase}?googleError=missing_code`, 302);
     }
 
-    type CalPayload = {
-      triggerEvent?: string;
-      payload?: {
-        uid?: string;
-        rescheduleUid?: string;
-        startTime?: string;
-        endTime?: string;
-        cancellationReason?: string;
-      };
-    };
-    let event: CalPayload;
     try {
-      event = JSON.parse(body) as CalPayload;
-    } catch {
-      return new Response("Bad JSON", { status: 400 });
+      await ctx.runAction(internal.googleOauth.exchangeCodeInternal, { code, state });
+      return Response.redirect(`${redirectBase}?googleConnected=1`, 302);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown";
+      return Response.redirect(
+        `${redirectBase}?googleError=${encodeURIComponent(message)}`,
+        302,
+      );
     }
-
-    const trigger = event.triggerEvent;
-    const p = event.payload ?? {};
-
-    if (trigger === "BOOKING_RESCHEDULED") {
-      const oldUid = p.rescheduleUid;
-      const newUid = p.uid;
-      const start = p.startTime ? Date.parse(p.startTime) : NaN;
-      const end = p.endTime ? Date.parse(p.endTime) : NaN;
-      if (!oldUid || !newUid || !Number.isFinite(start) || !Number.isFinite(end)) {
-        console.error("Reschedule webhook missing fields", p);
-        return new Response("bad payload", { status: 400 });
-      }
-      await ctx.runMutation(internal.bookings.applyReschedule, {
-        oldUid,
-        newUid,
-        slotStart: start,
-        slotEnd: end,
-      });
-      return new Response("ok", { status: 200 });
-    }
-
-    if (trigger === "BOOKING_CANCELLED") {
-      const uid = p.uid;
-      if (!uid) return new Response("bad payload", { status: 400 });
-      await ctx.runMutation(internal.bookings.markCancelled, { uid });
-      return new Response("ok", { status: 200 });
-    }
-
-    return new Response("ignored", { status: 200 });
   }),
 });
-
-// HMAC-SHA256 of `body` using `secret`, hex-encoded. Used by the Cal.com
-// webhook. Uses Web Crypto so it runs in Convex's default V8 runtime
-// without needing "use node".
-async function hmacSha256Hex(secret: string, body: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const buf = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 // HMAC-SHA256, base64-encoded. Square ships its webhook signature in base64.
 async function hmacSha256Base64(secret: string, body: string): Promise<string> {

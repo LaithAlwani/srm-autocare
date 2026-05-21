@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useAction } from "convex/react";
+import { useState } from "react";
+import { useAction, useQuery } from "convex/react";
 import { Calendar, Loader2, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -11,12 +11,15 @@ import { useModalTransition } from "@/lib/use-modal-transition";
 
 // Inline modal launched from a row in /admin/bookings. Shows a date + slot
 // picker scoped to the booking's service, then calls bookings.adminReschedule.
-// Cal.com fires its BOOKING_RESCHEDULED webhook on success; the local row
-// updates reactively via the Convex subscription on the parent table.
+// The action patches the booking row directly + sends the customer a
+// Resend-backed email + pushes the change to Google Calendar (if connected).
+// The local row updates reactively via the Convex subscription on the
+// parent table.
 export function RescheduleModal({
   bookingId,
   serviceId,
   currentSlotStart,
+  currentSlotEnd,
   customerName,
   serviceName,
   onClose,
@@ -24,11 +27,14 @@ export function RescheduleModal({
   bookingId: Id<"bookings">;
   serviceId: Id<"services">;
   currentSlotStart: number;
+  // End of the existing slot, used to derive the appointment's actual
+  // length (service + any add-ons) so the slot picker reserves the right
+  // amount of time at the new start.
+  currentSlotEnd: number;
   customerName: string;
   serviceName: string;
   onClose: () => void;
 }) {
-  const listSlots = useAction(api.calcom.listSlots);
   const adminReschedule = useAction(api.bookings.adminReschedule);
   const { shown, handleClose } = useModalTransition(onClose);
 
@@ -37,24 +43,32 @@ export function RescheduleModal({
     d.setDate(d.getDate() + 1);
     return d.toISOString().slice(0, 10);
   });
-  const [slots, setSlots] = useState<string[]>([]);
-  const [slotLoading, setSlotLoading] = useState(false);
-  const [slotError, setSlotError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setSlotLoading(true);
-    setSlotError(null);
-    listSlots({ serviceId, dateISO: date })
-      .then((s) => setSlots(s))
-      .catch((err) =>
-        setSlotError(err instanceof Error ? err.message : "Could not load slots"),
-      )
-      .finally(() => setSlotLoading(false));
-  }, [date, serviceId, listSlots]);
+  // Total duration the slot picker needs to reserve. Derived from the
+  // existing booking's range so any add-ons that extended the original
+  // appointment are respected on the new slot too.
+  const totalDurationMinutes = Math.max(
+    1,
+    Math.round((currentSlotEnd - currentSlotStart) / 60000),
+  );
+
+  // `excludeBookingId` makes the slot generator ignore THIS booking when
+  // computing collisions — otherwise the row blocks every slot that
+  // overlaps with its current window, including any nearby times the
+  // admin might actually want to move it to. useQuery so cancellations
+  // and other admin edits reflect live without closing + reopening.
+  const slotsResult = useQuery(api.scheduling.listSlots, {
+    serviceId,
+    dateISO: date,
+    totalDurationMinutes,
+    excludeBookingId: bookingId,
+  });
+  const slots = slotsResult ?? [];
+  const slotLoading = slotsResult === undefined;
 
   async function handleSubmit() {
     if (!selected) return;
@@ -136,8 +150,6 @@ export function RescheduleModal({
               <div className="flex items-center gap-2 text-foreground-muted py-6">
                 <Loader2 size={16} className="animate-spin" /> Loading slots...
               </div>
-            ) : slotError ? (
-              <p className="text-error text-body-md">{slotError}</p>
             ) : slots.length === 0 ? (
               <p className="text-foreground-muted text-body-md py-4">
                 No slots available on this date — try another.
@@ -168,7 +180,7 @@ export function RescheduleModal({
 
           <div>
             <label className="text-label-tech text-foreground-muted mb-2 block">
-              Reason (sent to customer in the Cal.com email — optional)
+              Reason (internal note — optional)
             </label>
             <textarea
               value={reason}

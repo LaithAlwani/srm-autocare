@@ -21,6 +21,7 @@ type RescheduleTarget = {
   bookingId: Id<"bookings">;
   serviceId: Id<"services">;
   currentSlotStart: number;
+  currentSlotEnd: number;
   customerName: string;
   serviceName: string;
 };
@@ -270,19 +271,14 @@ export default function AdminBookingsPage() {
                         bookingId: b._id,
                         serviceId: b.serviceId,
                         currentSlotStart: b.slotStart,
+                        currentSlotEnd: b.slotEnd,
                         customerName: b.customerName,
                         serviceName: b.serviceName,
                       })
                     }
-                    disabled={!b.calComBookingId || isCancelled}
+                    disabled={isCancelled}
                     className="inline-flex items-center justify-center gap-1.5 text-label-tech px-3 py-2 border border-border text-foreground-muted hover:text-primary hover:border-primary transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    title={
-                      !b.calComBookingId
-                        ? "No Cal.com booking attached — can't reschedule"
-                        : isCancelled
-                          ? "Booking is cancelled"
-                          : "Reschedule via Cal.com"
-                    }
+                    title={isCancelled ? "Booking is cancelled" : "Reschedule"}
                   >
                     <CalendarClock size={12} /> Reschedule
                   </button>
@@ -317,6 +313,7 @@ export default function AdminBookingsPage() {
           bookingId={rescheduleTarget.bookingId}
           serviceId={rescheduleTarget.serviceId}
           currentSlotStart={rescheduleTarget.currentSlotStart}
+          currentSlotEnd={rescheduleTarget.currentSlotEnd}
           customerName={rescheduleTarget.customerName}
           serviceName={rescheduleTarget.serviceName}
           onClose={() => setRescheduleTarget(null)}
@@ -340,8 +337,8 @@ export default function AdminBookingsPage() {
                 will be cancelled.
               </p>
               <p>
-                Cal.com will email the customer with the cancellation. Use the Refund button on the
-                cancelled booking to issue a refund.
+                The customer will receive a cancellation email from us. Use the Refund button on
+                the cancelled booking to issue a refund.
               </p>
             </div>
           }

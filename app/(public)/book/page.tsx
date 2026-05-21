@@ -67,8 +67,6 @@ export default function BookPage() {
   const searchParams = useSearchParams();
   const services = useQuery(api.services.list, {});
   const addOns = useQuery(api.addOns.list, {});
-  const listSlots = useAction(api.calcom.listSlots);
-  const findNextAvailableDate = useAction(api.calcom.findNextAvailableDate);
   const createDraftBooking = useAction(api.square.createDraftBooking);
 
   const [step, setStep] = useState<Step>(0);
@@ -84,9 +82,6 @@ export default function BookPage() {
   // landing on the footer when a step's content is shorter than what they
   // were viewing before.
   const stepperRef = useRef<HTMLDivElement>(null);
-  const [slots, setSlots] = useState<string[]>([]);
-  const [slotLoading, setSlotLoading] = useState(false);
-  const [slotError, setSlotError] = useState<string | null>(null);
   const [slotStartISO, setSlotStartISO] = useState<string | null>(null);
   const [details, setDetails] = useState({
     customerName: "",
@@ -159,25 +154,45 @@ export default function BookPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [services, addOns]);
 
+  // Live slot list — reactive query so cancellations / new bookings show
+  // up immediately for anyone viewing this step.
+  const slotsResult = useQuery(
+    api.scheduling.listSlots,
+    step === 2 && serviceId
+      ? {
+          serviceId,
+          dateISO: date,
+          totalDurationMinutes: totalDurationMinutes || undefined,
+        }
+      : "skip",
+  );
+  const slots = slotsResult ?? [];
+  const slotLoading = step === 2 && serviceId !== null && slotsResult === undefined;
+
   // The first time the customer lands on the slot step for a given service,
   // jump them to the nearest day that actually has open slots — saves them
-  // clicking forward through empty days. We pass the *total* duration so the
-  // lookup respects any add-ons selected on the prior step.
+  // clicking forward through empty days. Subscribes only while we haven't
+  // auto-picked yet; after the first hop it falls back to "skip".
+  const nextAvailableDate = useQuery(
+    api.scheduling.findNextAvailableDate,
+    step === 2 && serviceId && autoSelectedFor !== serviceId
+      ? { serviceId, totalDurationMinutes: totalDurationMinutes || undefined }
+      : "skip",
+  );
+
   useEffect(() => {
-    if (step !== 2 || !serviceId || autoSelectedFor === serviceId) return;
-    setAutoSelectedFor(serviceId);
-    findNextAvailableDate({
-      serviceId,
-      totalDurationMinutes: totalDurationMinutes || undefined,
-    })
-      .then((next) => {
-        if (next && next >= minDate) setDate(next);
-      })
-      .catch(() => {
-        // If the lookup fails we just leave the date on today — the slot
-        // fetch below will still run and surface its own error.
-      });
-  }, [step, serviceId, autoSelectedFor, findNextAvailableDate, minDate, totalDurationMinutes]);
+    if (
+      step === 2 &&
+      serviceId &&
+      autoSelectedFor !== serviceId &&
+      nextAvailableDate !== undefined
+    ) {
+      setAutoSelectedFor(serviceId);
+      if (nextAvailableDate && nextAvailableDate >= minDate) {
+        setDate(nextAvailableDate);
+      }
+    }
+  }, [step, serviceId, autoSelectedFor, nextAvailableDate, minDate]);
 
   // Scroll the stepper into view whenever the step changes. Skip the very
   // first render so we don't jolt the page on initial mount. `start` block
@@ -190,23 +205,6 @@ export default function BookPage() {
     }
     stepperRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [step]);
-
-  // Re-fetch slots when date, service, total duration, or step changes to
-  // the Slot step (step 2). totalDurationMinutes accounts for any selected
-  // add-ons so the slot lookup reserves enough room.
-  useEffect(() => {
-    if (step !== 2 || !serviceId) return;
-    setSlotLoading(true);
-    setSlotError(null);
-    listSlots({
-      serviceId,
-      dateISO: date,
-      totalDurationMinutes: totalDurationMinutes || undefined,
-    })
-      .then((s) => setSlots(s))
-      .catch((err) => setSlotError(err instanceof Error ? err.message : "Could not load slots"))
-      .finally(() => setSlotLoading(false));
-  }, [step, date, serviceId, listSlots, totalDurationMinutes]);
 
   async function handleBookAndPay() {
     if (!serviceId || !slotStartISO || !selectedService) return;
@@ -503,8 +501,6 @@ export default function BookPage() {
                   <div className="flex items-center gap-3 text-foreground-muted">
                     <Loader2 className="animate-spin" size={18} /> Loading availability...
                   </div>
-                ) : slotError ? (
-                  <p className="text-error">{slotError}</p>
                 ) : slots.length === 0 ? (
                   <p className="text-foreground-muted">No slots available on this date — try another.</p>
                 ) : (

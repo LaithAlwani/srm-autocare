@@ -1,6 +1,7 @@
 import { Email } from "@convex-dev/auth/providers/Email";
 import { convexAuth } from "@convex-dev/auth/server";
 import { Resend } from "resend";
+import { siteConfig } from "../config/site";
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
@@ -15,8 +16,9 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         const apiKey = process.env.RESEND_API_KEY;
         if (!apiKey) throw new Error("RESEND_API_KEY is not set");
         const resend = new Resend(apiKey);
+        const address = process.env.AUTH_FROM_EMAIL ?? "noreply@srm-autocare.com";
         await resend.emails.send({
-          from: process.env.AUTH_FROM_EMAIL ?? "noreply@srm-autocare.com",
+          from: `${siteConfig.shortName} ${siteConfig.name} <${address}>`,
           to: email,
           subject: "Your SRM Auto Care login code",
           html: `

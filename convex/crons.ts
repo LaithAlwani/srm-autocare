@@ -15,4 +15,14 @@ crons.interval(
   {},
 );
 
+// Drop stale OAuth `state` rows minted by the Google connect flow. The
+// state has a 10-minute TTL — anything older was either consumed
+// successfully (and self-deleted) or abandoned mid-flow.
+crons.interval(
+  "cleanup expired oauth states",
+  { minutes: 15 },
+  internal.googleOauth.cleanupExpiredStates,
+  {},
+);
+
 export default crons;

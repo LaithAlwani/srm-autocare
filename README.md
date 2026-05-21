@@ -6,7 +6,7 @@ Premium car-detailing site built on Next.js 16 + Convex.
 - **Brand info**: centralized in `config/site.ts` (nav, contact, address, social). Editable site copy (hero, process steps) lives in Convex `siteContent` so the admin can change it without a redeploy.
 - **Backend**: Convex 1.38 (schema, queries, mutations, file storage, HTTP routes).
 - **Auth**: Convex Auth Email OTP via Resend — admin-only sign-in (`/admin/login`).
-- **Booking**: Cal.com slot availability + Square Web Payments SDK deposit. The booking is persisted as a draft when the customer reaches the Payment step, promoted to confirmed once Square approves the charge, then pushed to Cal.com.
+- **Booking**: in-house scheduling (slot availability derived from business hours + existing bookings) + Square Web Payments SDK deposit. The booking is persisted as a draft when the customer reaches the Payment step, promoted to confirmed once Square approves the charge, then pushed to the owner's Google Calendar (optional, via OAuth).
 
 ## Getting started
 
@@ -18,7 +18,7 @@ npm install
 npx convex login
 npx convex dev   # leave this running in a separate terminal — it watches convex/ and pushes
 
-# 3. Copy env template and fill in values from convex dashboard / Square / Cal.com / Resend
+# 3. Copy env template and fill in values from convex dashboard / Square / Resend
 cp .env.local.example .env.local
 
 # 4. Seed the database (services + reviews + sample siteContent)
@@ -37,23 +37,51 @@ npm run dev
    npx convex run seed:promoteOwner '{"email":"you@example.com"}'
    ```
 
-## Cal.com webhook (sync reschedules / cancellations)
+## Scheduling (in-house)
 
-When a customer reschedules or cancels via the link in their Cal.com confirmation
-email, the change needs to flow back into Convex. Configure once:
+Slot availability is computed from a single `businessHours` row in the
+`siteContent` table, plus the existing bookings already in the database.
+No external calendar service.
 
-1. https://app.cal.com → **Settings → Developer → Webhooks → New**
-2. **Subscriber URL**: `https://<convex-site-url>/calcom/webhook` (find your Convex site URL in the dashboard)
-3. **Event Triggers**: check **`BOOKING_RESCHEDULED`** and **`BOOKING_CANCELLED`**
-4. **Secret**: generate / paste any random string (e.g. `openssl rand -hex 32`)
-5. Push that same secret to Convex:
+Editable at `/admin/settings` → **Hours & availability**:
+
+- Open / close time per weekday (Mon–Sun)
+- Slot interval (e.g. 30 min)
+- Earliest booking notice (e.g. 60 min — can't book inside the next hour)
+- Booking window (how many days ahead customers can see)
+- Blackout dates (closed days, holidays, vacation)
+
+The slot generator lives at [convex/scheduling.ts](convex/scheduling.ts).
+Pure compute against our own DB — to debug "why is this slot not showing
+up?" just open the file and walk the filter chain.
+
+## Google Calendar push (optional)
+
+Wire the owner's Google Calendar so every booking, reschedule, and
+cancellation pushes immediately. Push-only — the booking flow doesn't read
+busy times from Google (use Blackout Dates for that).
+
+### 1. Set up the OAuth client in Google Cloud Console
+
+1. https://console.cloud.google.com → create a project (or pick existing).
+2. **APIs & Services → Library** → enable **Google Calendar API**.
+3. **OAuth consent screen** → External user type → app name "SRM Auto Care",
+   add scope `.../auth/calendar.events`, add yourself as a test user.
+4. **Credentials → Create credentials → OAuth client ID** → Web application.
+   Authorized redirect URI: `https://<convex-site-url>/oauth/google/callback`.
+5. Copy the Client ID + Client secret. Push to Convex:
    ```bash
-   npx convex env set CALCOM_WEBHOOK_SECRET <the-secret>
+   npx convex env set GOOGLE_OAUTH_CLIENT_ID <client-id>
+   npx convex env set GOOGLE_OAUTH_CLIENT_SECRET <client-secret>
+   npx convex env set GOOGLE_OAUTH_REDIRECT_URI https://<convex-site-url>/oauth/google/callback
    ```
 
-After saving, every reschedule updates the booking row's `slotStart` / `slotEnd`
-and swaps the Cal.com UID. Every cancellation flips the row's `status` to
-`cancelled`. Both fire an owner notification email via Resend.
+### 2. Owner connects from /admin/settings
+
+1. Open `/admin/settings` → **Google Calendar** card → **Connect Google Calendar**.
+2. Walk through Google's consent screen.
+3. You land back on settings with a "Connected" status. New bookings push
+   in real time. To stop the integration: click **Disconnect**.
 
 ## Square Web Payments SDK setup
 
@@ -134,9 +162,12 @@ convex/
   users.ts            requireAdmin() guard
   services/gallery/reviews/siteContent.ts   public + admin CRUD
   bookings.ts         booking lifecycle (draft → confirmed → cancelled / completed)
-  calcom.ts           slot listing + booking creation
+  scheduling.ts       in-house slot generator + business-hours admin
+  googleCalendar.ts   push events to the connected Google Calendar
+  googleOauth.ts      per-owner OAuth connect / disconnect
+  emails.ts           Resend-backed booking lifecycle emails
   square.ts           Square preload + confirmAndCharge + refund actions
-  http.ts             Square webhook + Cal.com webhook + auth routes
+  http.ts             Square webhook + Google OAuth callback + auth routes
   crons.ts            sweeps abandoned booking drafts every 15 min
   seed.ts             bootstrap services + promote owner
 proxy.ts            Next.js 16 proxy (was middleware) — gates /admin/*

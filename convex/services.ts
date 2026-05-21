@@ -56,12 +56,10 @@ export const get = query({
 // ─────────────────────────────────────────────────────────────────
 // ADMIN
 //
-// `create`, `update`, and `remove` are public actions instead of mutations
-// because they sync the matching Cal.com event type (HTTP call). They do
-// auth + Cal.com side effects, then delegate the actual DB write to
-// internal mutations below. The admin no longer enters a calcomEventTypeId
-// by hand — it's captured from Cal.com's API response on creation and
-// stored on the row automatically.
+// `create`, `update`, and `remove` are actions so they have a place to
+// run side effects in the future (image cleanup, etc.). They do auth +
+// slug derivation, then delegate the actual DB write to internal
+// mutations below.
 // ─────────────────────────────────────────────────────────────────
 
 const baseFields = {
@@ -90,23 +88,9 @@ export const create = action({
     const slug = slugify(args.name);
     if (!slug) throw new Error("Service name must contain at least one letter or digit");
 
-    // 1. Create the matching Cal.com event type — fail fast if Cal.com errors,
-    //    so we never end up with a service that has no bookable calendar.
-    const { eventTypeId } = await ctx.runAction(
-      internal.calcom.createEventTypeInternal,
-      {
-        title: args.name,
-        slug,
-        lengthInMinutes: args.durationMinutes,
-        description: args.description,
-      },
-    );
-
-    // 2. Insert the service row with the captured event type id.
     return await ctx.runMutation(internal.services.insertInternal, {
       ...args,
       slug,
-      calcomEventTypeId: eventTypeId,
     });
   },
 });
@@ -144,39 +128,6 @@ export const update = action({
       throw new Error("Service name must contain at least one letter or digit");
     }
 
-    // 1. Sync the change to Cal.com if the row is linked. We only care about
-    //    fields Cal.com knows: title (name), duration, description.
-    if (existing.calcomEventTypeId) {
-      const calPatch: {
-        title?: string;
-        lengthInMinutes?: number;
-        description?: string;
-      } = {};
-      if (args.patch.name !== undefined && args.patch.name !== existing.name) {
-        calPatch.title = args.patch.name;
-      }
-      if (
-        args.patch.durationMinutes !== undefined &&
-        args.patch.durationMinutes !== existing.durationMinutes
-      ) {
-        calPatch.lengthInMinutes = args.patch.durationMinutes;
-      }
-      if (
-        args.patch.description !== undefined &&
-        args.patch.description !== existing.description
-      ) {
-        calPatch.description = args.patch.description;
-      }
-      if (Object.keys(calPatch).length > 0) {
-        await ctx.runAction(internal.calcom.updateEventTypeInternal, {
-          eventTypeId: existing.calcomEventTypeId,
-          ...calPatch,
-        });
-      }
-    }
-
-    // 2. Patch the local row — including a regenerated slug when the name
-    //    changed.
     await ctx.runMutation(internal.services.patchInternal, {
       id: args.id,
       patch: { ...args.patch, ...slugPatch },
@@ -193,16 +144,6 @@ export const remove = action({
     }
     const existing = await ctx.runQuery(api.services.get, { id: args.id });
     if (!existing) return;
-
-    // 1. Delete from Cal.com first so a half-successful op leaves the calendar
-    //    clean (better an orphan service row than an orphan calendar event).
-    if (existing.calcomEventTypeId) {
-      await ctx.runAction(internal.calcom.deleteEventTypeInternal, {
-        eventTypeId: existing.calcomEventTypeId,
-      });
-    }
-
-    // 2. Delete the row + any uploaded image.
     await ctx.runMutation(internal.services.removeInternal, { id: args.id });
   },
 });
@@ -218,7 +159,6 @@ export const insertInternal = internalMutation({
     // Slug is supplied by the action (derived from the name) rather than
     // accepted from the admin form.
     slug: v.string(),
-    calcomEventTypeId: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("services", args);
@@ -250,19 +190,6 @@ export const patchInternal = internalMutation({
       patch.imageStorageId = imageStorageId === null ? undefined : imageStorageId;
     }
     await ctx.db.patch(args.id, patch);
-  },
-});
-
-// Used by the slot lookup self-heal path: when Cal.com tells us an event
-// type no longer exists, we create a fresh one and stamp the new id onto
-// the service so subsequent bookings work.
-export const setCalcomEventTypeIdInternal = internalMutation({
-  args: {
-    id: v.id("services"),
-    calcomEventTypeId: v.number(),
-  },
-  handler: async (ctx, args) => {
-    await ctx.db.patch(args.id, { calcomEventTypeId: args.calcomEventTypeId });
   },
 });
 

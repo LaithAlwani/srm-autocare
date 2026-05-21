@@ -37,9 +37,8 @@ export default defineSchema({
     imageStorageId: v.optional(v.id("_storage")),
     icon: v.optional(v.string()),
     badge: v.optional(v.string()),
-    // Cal.com event type ID for this service. If unset, falls back to the
-    // CALCOM_EVENT_TYPE_ID env var. Each service should ideally have its own
-    // event type so durations and availability can differ.
+    // Deprecated — Cal.com is no longer used. Kept optional so existing
+    // rows still validate; new writes never set it.
     calcomEventTypeId: v.optional(v.number()),
     order: v.number(),
     active: v.boolean(),
@@ -107,7 +106,12 @@ export default defineSchema({
         }),
       ),
     ),
+    // Deprecated — Cal.com is no longer used. Kept optional for legacy rows;
+    // new code never reads or writes this field.
     calComBookingId: v.optional(v.string()),
+    // Google Calendar event id stamped after a successful push to the
+    // connected calendar. Used to PATCH on reschedule and DELETE on cancel.
+    googleCalendarEventId: v.optional(v.string()),
     slotStart: v.number(),
     slotEnd: v.number(),
     // The original booked time, only set once the first time the booking is
@@ -153,6 +157,15 @@ export default defineSchema({
     .index("by_email", ["customerEmail"])
     .index("by_status", ["status"])
     .index("by_slot_start", ["slotStart"])
-    .index("by_square_idempotency_key", ["squareIdempotencyKey"])
-    .index("by_calcom_uid", ["calComBookingId"]),
+    .index("by_square_idempotency_key", ["squareIdempotencyKey"]),
+
+  // Short-lived OAuth `state` tokens minted when the admin starts a
+  // Google Calendar connect flow. Verified + deleted on the callback.
+  // Stale rows are swept by a cron in convex/crons.ts every 15 minutes.
+  oauthStates: defineTable({
+    state: v.string(),
+    userId: v.id("users"),
+    kind: v.string(), // e.g. "google-calendar"
+    createdAt: v.number(),
+  }).index("by_state", ["state"]),
 });

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useAction, useQuery } from "convex/react";
-import { Plus, Trash2, Pencil, X, Check, Loader2, ExternalLink } from "lucide-react";
+import { Plus, Trash2, Pencil, X, Check, Loader2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Eyebrow } from "@/components/ui/eyebrow";
@@ -52,7 +52,6 @@ export default function AdminServicesPage() {
   const [deleteTarget, setDeleteTarget] = useState<{
     id: Id<"services">;
     name: string;
-    calcomEventTypeId?: number;
   } | null>(null);
 
   function startEdit(s: NonNullable<typeof services>[number]) {
@@ -214,12 +213,12 @@ export default function AdminServicesPage() {
             />
             <div className="md:col-span-2 p-4 border border-border bg-surface-container-low">
               <p className="text-label-tech text-foreground-muted">
-                A matching Cal.com event type is created automatically on save with this
-                duration and the booking fields the customer flow needs (vehicle, notes).
-                Edits to <span className="text-foreground">name</span>,{" "}
-                <span className="text-foreground">duration</span>, or{" "}
-                <span className="text-foreground">description</span> sync over to Cal.com.
-                Availability and other Cal.com settings are managed in the Cal.com dashboard.
+                Availability is computed from{" "}
+                <span className="text-foreground">/admin/settings → Hours &amp; availability</span>{" "}
+                plus the existing bookings on the calendar. When this service is{" "}
+                <span className="text-foreground">Active</span>, customers will see slots that
+                fit its duration. To push bookings to your Google Calendar, connect it under
+                Settings.
               </p>
             </div>
             <div className="md:col-span-2 flex items-center gap-3">
@@ -270,7 +269,6 @@ export default function AdminServicesPage() {
                   <th className="text-left p-4">Service</th>
                   <th className="text-left p-4 w-24">Duration</th>
                   <th className="text-right p-4 w-32">Pricing</th>
-                  <th className="text-center p-4 w-28">Cal.com</th>
                   <th className="text-right p-4 w-28">Actions</th>
                 </tr>
               </thead>
@@ -319,21 +317,6 @@ export default function AdminServicesPage() {
                           {formatPriceFromCents(computeDepositCents(s.priceFromCents))} dep.
                         </div>
                       </td>
-                      <td className="p-4 text-center text-label-tech">
-                        {s.calcomEventTypeId ? (
-                          <a
-                            href={`https://app.cal.com/event-types/${s.calcomEventTypeId}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-primary hover:underline inline-flex items-center gap-1"
-                            title={`Cal.com event type ${s.calcomEventTypeId}`}
-                          >
-                            #{s.calcomEventTypeId} <ExternalLink size={10} />
-                          </a>
-                        ) : (
-                          <span className="text-foreground-muted">—</span>
-                        )}
-                      </td>
                       <td className="p-4 text-right whitespace-nowrap">
                         <button
                           onClick={() => startEdit(s)}
@@ -347,7 +330,6 @@ export default function AdminServicesPage() {
                             setDeleteTarget({
                               id: s._id,
                               name: s.name,
-                              calcomEventTypeId: s.calcomEventTypeId,
                             })
                           }
                           className="p-2 text-foreground-muted hover:text-error transition-colors ml-1"
@@ -405,21 +387,6 @@ export default function AdminServicesPage() {
                     <dd className="text-right text-foreground-muted font-mono-tech">
                       {formatPriceFromCents(computeDepositCents(s.priceFromCents))}
                     </dd>
-                    <dt className="text-foreground-muted">Cal.com</dt>
-                    <dd className="text-right">
-                      {s.calcomEventTypeId ? (
-                        <a
-                          href={`https://app.cal.com/event-types/${s.calcomEventTypeId}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-primary hover:underline inline-flex items-center gap-1"
-                        >
-                          #{s.calcomEventTypeId} <ExternalLink size={10} />
-                        </a>
-                      ) : (
-                        <span className="text-foreground-muted">—</span>
-                      )}
-                    </dd>
                   </dl>
 
                   <div className="flex gap-2 pt-2 border-t border-border">
@@ -434,7 +401,6 @@ export default function AdminServicesPage() {
                         setDeleteTarget({
                           id: s._id,
                           name: s.name,
-                          calcomEventTypeId: s.calcomEventTypeId,
                         })
                       }
                       className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-label-tech border border-error/40 text-error hover:bg-error/10 transition-colors"
@@ -456,22 +422,11 @@ export default function AdminServicesPage() {
           confirmLabel="Delete service"
           cancelLabel="Keep service"
           message={
-            <div className="space-y-3">
-              <p>
-                <span className="text-foreground">{deleteTarget.name}</span> will be removed from
-                the public site and the booking flow.
-              </p>
-              {deleteTarget.calcomEventTypeId && (
-                <p>
-                  Its Cal.com event type{" "}
-                  <span className="text-foreground font-mono-tech">
-                    #{deleteTarget.calcomEventTypeId}
-                  </span>{" "}
-                  will also be deleted. Existing bookings tied to this service stay in the
-                  database.
-                </p>
-              )}
-            </div>
+            <p>
+              <span className="text-foreground">{deleteTarget.name}</span> will be removed from
+              the public site and the booking flow. Existing bookings tied to this service
+              stay in the database.
+            </p>
           }
           onConfirm={async () => {
             await removeService({ id: deleteTarget.id });

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
+import { DEFAULT_BUSINESS_HOURS } from "../lib/businessHours";
 
 // Run with: `npx convex run seed:run --no-push '{"ownerEmail":"you@example.com"}'`
 // (Use `seed:promoteOwner` separately if you've already signed in once and just
@@ -119,6 +120,13 @@ const DEFAULT_SITE_CONTENT: Array<{ key: string; value: unknown }> = [
         { number: "04", title: "Preservation", body: "Curing ceramic or graphene coatings for permanent luster." },
       ],
     },
+  },
+  {
+    // Booking-flow scheduling config. Editable from /admin/settings; the
+    // public booking page reads this every slot lookup. Default values
+    // mirror what we used to set on Cal.com.
+    key: "businessHours",
+    value: DEFAULT_BUSINESS_HOURS,
   },
 ];
 
