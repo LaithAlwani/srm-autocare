@@ -164,17 +164,30 @@ export function SquarePaymentForm({
     }
   }
 
+  // Only resolve a script URL once the config query has actually returned.
+  // Rendering the <Script> tag with a defaulted URL before then causes
+  // Next.js to mount it, and when `environment` later flips from
+  // sandbox-default to production the tag re-renders with the new src
+  // WITHOUT unmounting the old one — both scripts end up on the page
+  // and Square's SDK throws "initialized with production app id but
+  // currently using sandbox" (or the inverse).
   const scriptUrl =
-    environment === "production" ? SCRIPT_URL_PRODUCTION : SCRIPT_URL_SANDBOX;
+    environment === "production"
+      ? SCRIPT_URL_PRODUCTION
+      : environment === "sandbox"
+        ? SCRIPT_URL_SANDBOX
+        : null;
 
   return (
     <>
-      <Script
-        src={scriptUrl}
-        strategy="afterInteractive"
-        onReady={() => setScriptReady(true)}
-        onLoad={() => setScriptReady(true)}
-      />
+      {scriptUrl && (
+        <Script
+          src={scriptUrl}
+          strategy="afterInteractive"
+          onReady={() => setScriptReady(true)}
+          onLoad={() => setScriptReady(true)}
+        />
+      )}
 
       {/* Square injects its iframe into this div. Min height keeps the
           surrounding gloss-card from collapsing while the SDK loads. */}
