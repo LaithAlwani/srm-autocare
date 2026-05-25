@@ -2,10 +2,11 @@
 // Convex's default V8 runtime per the project guidelines.
 
 import { v } from "convex/values";
-import { action, internalAction } from "./_generated/server";
+import { action, internalAction, query } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { computeDepositCents } from "../lib/booking";
+import { SLOT_COLLISION_ERROR } from "./bookings";
 
 // Square's REST API base URLs. We choose between them based on
 // NEXT_PUBLIC_SQUARE_ENVIRONMENT, which is also what the frontend reads when
@@ -89,16 +90,50 @@ async function squareRequest<TResponse>(
   return JSON.parse(text) as TResponse;
 }
 
-// PUBLIC: writes a draft booking row keyed by a freshly-generated idempotency
-// key, then returns everything the frontend needs to mount Square's Web
-// Payments SDK and complete the charge. The draft is what guarantees we have
-// somewhere to look the booking up by when the payment.updated webhook
-// arrives — same defense-in-depth pattern any synchronous-charge flow uses.
-export const createDraftBooking = action({
+// PUBLIC: read-only handshake the booking page does on mount of the Payment
+// step. Returns the public SDK configuration the Web Payments SDK needs to
+// initialize. No DB write — the row only exists after Square approves the
+// charge. Frontend generates its own idempotency key (UUID), which Square
+// dedupes server-side, so a Pay button double-click can't double-charge.
+export const getSquareConfig = query({
+  args: {},
+  handler: async (): Promise<{
+    applicationId: string;
+    locationId: string;
+    environment: SquareEnvironment;
+  }> => {
+    return {
+      applicationId: requireApplicationId(),
+      locationId: requireLocationId(),
+      environment: squareEnv(),
+    };
+  },
+});
+
+// PUBLIC: the entire booking pipeline in one action. Takes the full booking
+// payload + the freshly-tokenized card source, hits Square's /payments
+// endpoint, and ONLY on a successful charge inserts the booking row with
+// status=confirmed/paid. No more pre-flight draft rows blocking slots while
+// a customer abandons checkout.
+//
+// Failure semantics:
+//   - Service inactive / add-ons missing / slot taken → throws before
+//     charging; the customer's card is never touched.
+//   - Square declines → throws with a friendly error; no booking row
+//     created.
+//   - Square charges, our insert mutation fails (extremely rare, Convex
+//     outage mid-action) → customer is charged but no booking exists;
+//     they get an error, admin reconciles from the Square dashboard.
+//
+// The squareIdempotencyKey check on the insert is the safety net for
+// action retries — calling this twice with the same key reuses the
+// existing row instead of double-booking.
+export const confirmAndCharge = action({
   args: {
+    idempotencyKey: v.string(),
+    sourceId: v.string(),
     serviceId: v.id("services"),
     slotStart: v.number(),
-    slotEnd: v.number(),
     customerName: v.string(),
     customerEmail: v.string(),
     customerPhone: v.string(),
@@ -111,19 +146,27 @@ export const createDraftBooking = action({
   handler: async (
     ctx,
     args,
-  ): Promise<{
-    idempotencyKey: string;
-    depositCents: number;
-    applicationId: string;
-    locationId: string;
-    environment: SquareEnvironment;
-  }> => {
+  ): Promise<{ ok: true; bookingId: Id<"bookings">; idempotencyKey: string }> => {
+    // Idempotency short-circuit: if a previous call with the same key
+    // already landed a booking, return it. Prevents action retries from
+    // creating duplicates.
+    const existing = await ctx.runQuery(
+      internal.bookings.getInternalBySquareIdempotency,
+      { idempotencyKey: args.idempotencyKey },
+    );
+    if (existing) {
+      return {
+        ok: true,
+        bookingId: existing._id,
+        idempotencyKey: args.idempotencyKey,
+      };
+    }
+
+    // 1. Validate service + resolve add-ons server-side (price integrity).
     const service = await ctx.runQuery(api.services.get, { id: args.serviceId });
     if (!service) throw new Error("Service not found");
     if (!service.active) throw new Error("Service is not bookable");
 
-    // Resolve add-on IDs to authoritative server-side rows so we can trust
-    // the prices + durations. Build snapshots for the booking row.
     const addOnRows =
       args.addOnIds && args.addOnIds.length > 0
         ? await ctx.runQuery(internal.addOns.getMany, { ids: args.addOnIds })
@@ -140,65 +183,25 @@ export const createDraftBooking = action({
       0,
     );
 
-    // Square accepts idempotency keys up to 45 chars. `srm-` + a UUID (36
-    // chars without hyphens collapsed; 40 with hyphens) fits cleanly.
-    const idempotencyKey = `srm-${crypto.randomUUID()}`.slice(0, 45);
-    // Deposit is a fixed fraction (33%) of the full appointment total —
-    // service price plus every selected add-on. Computed server-side so the
-    // client can never short-pay by tampering with the value.
     const totalCents = service.priceFromCents + addOnsTotalCents;
     const depositCents = computeDepositCents(totalCents);
-    // Recompute slot end from total duration so it's authoritative server-side.
     const slotEnd =
       args.slotStart + (service.durationMinutes + addOnsTotalMinutes) * 60 * 1000;
 
-    await ctx.runMutation(internal.bookings.createDraft, {
-      squareIdempotencyKey: idempotencyKey,
-      serviceId: args.serviceId,
+    // 2. Slot collision check. Race-window between two simultaneous bookers
+    //    is wafer-thin for a single-shop app but cheap to guard against.
+    const taken = await ctx.runQuery(internal.bookings.slotIsTaken, {
       slotStart: args.slotStart,
       slotEnd,
-      customerName: args.customerName,
-      customerEmail: args.customerEmail,
-      customerPhone: args.customerPhone,
-      vehicleInfo: args.vehicleInfo,
-      notes: args.notes,
-      depositAmountCents: depositCents,
-      selectedAddOns: selectedAddOns.length > 0 ? selectedAddOns : undefined,
     });
-
-    return {
-      idempotencyKey,
-      depositCents,
-      applicationId: requireApplicationId(),
-      locationId: requireLocationId(),
-      environment: squareEnv(),
-    };
-  },
-});
-
-// PUBLIC: called by the frontend once it has tokenized the card via Square's
-// Web Payments SDK. We charge synchronously and confirm the booking in one
-// hop. The webhook is only there as defense-in-depth for the rare tab-close
-// window between Square approving and this action returning.
-export const confirmAndCharge = action({
-  args: {
-    idempotencyKey: v.string(),
-    sourceId: v.string(),
-  },
-  handler: async (ctx, args): Promise<{ ok: true; bookingId: Id<"bookings"> }> => {
-    const draft = await ctx.runQuery(internal.bookings.getInternalBySquareIdempotency, {
-      idempotencyKey: args.idempotencyKey,
-    });
-    if (!draft) {
-      throw new Error(`No draft booking for idempotency key ${args.idempotencyKey}`);
-    }
-    // If a prior call already settled this, short-circuit so a double-click
-    // doesn't double-charge. Same idempotency story Square enforces server-
-    // side, just one round-trip earlier.
-    if (draft.paymentStatus === "paid" && draft.squarePaymentId) {
-      return { ok: true, bookingId: draft._id };
+    if (taken) {
+      throw new Error(
+        "Sorry, that time slot was just booked by someone else. Please pick another time.",
+      );
     }
 
+    // 3. Charge Square. Errors here throw and the customer's card is not
+    //    debited (Square only debits on approval).
     type SquarePayment = {
       payment?: {
         id?: string;
@@ -209,10 +212,7 @@ export const confirmAndCharge = action({
     const response = await squareRequest<SquarePayment>("/payments", {
       source_id: args.sourceId,
       idempotency_key: args.idempotencyKey,
-      amount_money: {
-        amount: draft.depositAmountCents,
-        currency: "CAD",
-      },
+      amount_money: { amount: depositCents, currency: "CAD" },
       location_id: requireLocationId(),
       reference_id: args.idempotencyKey,
       note: `SRM Auto Care deposit — ${args.idempotencyKey}`,
@@ -223,26 +223,81 @@ export const confirmAndCharge = action({
     if (!payment?.id) {
       throw new Error("Square /payments returned no payment");
     }
-    // Square uses COMPLETED for autocompleted card payments. APPROVED is the
-    // pre-capture status; we don't use delayed capture so we never expect it,
-    // but we accept it just in case Square's behavior shifts.
+    // COMPLETED = autocomplete card charge; APPROVED = pre-capture (we
+    // don't use that mode but accept it in case Square's behavior shifts).
     const status = payment.status ?? "";
     if (status !== "COMPLETED" && status !== "APPROVED") {
       throw new Error(`Square payment is in unexpected state: ${status}`);
     }
-    const amountCents = payment.amount_money?.amount ?? draft.depositAmountCents;
 
-    const { id, isNew } = await ctx.runMutation(internal.bookings.confirmFromPayment, {
-      idempotencyKey: args.idempotencyKey,
-      squarePaymentId: payment.id,
-      amountCents,
-    });
+    // 4. Insert the booking with confirmed status. The mutation does a
+    //    final serializable slot-collision check; if it throws the
+    //    tagged collision error we auto-refund the just-completed
+    //    Square charge so the customer isn't charged for a slot that
+    //    raced out from under them.
+    let id: Id<"bookings">;
+    let isNew: boolean;
+    try {
+      const result = await ctx.runMutation(
+        internal.bookings.createConfirmedInternal,
+        {
+          squareIdempotencyKey: args.idempotencyKey,
+          squarePaymentId: payment.id,
+          serviceId: args.serviceId,
+          slotStart: args.slotStart,
+          slotEnd,
+          customerName: args.customerName,
+          customerEmail: args.customerEmail,
+          customerPhone: args.customerPhone,
+          vehicleInfo: args.vehicleInfo,
+          notes: args.notes,
+          depositAmountCents: depositCents,
+          selectedAddOns: selectedAddOns.length > 0 ? selectedAddOns : undefined,
+        },
+      );
+      id = result.id;
+      isNew = result.isNew;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes(SLOT_COLLISION_ERROR)) {
+        // Race lost — refund the Square charge and surface a friendly
+        // error. We use the action-level helper so the refund stays a
+        // single source of truth.
+        try {
+          await squareRequest("/refunds", {
+            idempotency_key: `srm-collision-refund-${args.idempotencyKey}`.slice(0, 45),
+            payment_id: payment.id,
+            amount_money: { amount: depositCents, currency: "CAD" },
+            reason: "Slot was booked by another customer simultaneously",
+          });
+        } catch (refundErr) {
+          // If the auto-refund itself fails, log loudly — admin needs
+          // to manually refund. Customer still gets the error message
+          // below; their card is charged until admin reconciles.
+          console.error(
+            `[square confirm] Auto-refund FAILED for orphan payment ${payment.id} (collision). Manual refund needed.`,
+            refundErr,
+          );
+        }
+        throw new Error(
+          "Sorry, that time slot was just booked by someone else. Your card has been refunded — please pick another time.",
+        );
+      }
+      // Non-collision error after a successful charge. Customer is
+      // charged but no booking exists — log for admin reconciliation.
+      console.error(
+        `[square confirm] Insert failed AFTER Square charged ${payment.id} (ref ${args.idempotencyKey}). Manual reconciliation needed.`,
+        err,
+      );
+      throw err;
+    }
 
+    // 5. Fan out the post-booking side effects on the first insert only.
     if (isNew) {
       await dispatchPostBooking(ctx, id);
     }
 
-    return { ok: true, bookingId: id };
+    return { ok: true, bookingId: id, idempotencyKey: args.idempotencyKey };
   },
 });
 

@@ -46,7 +46,6 @@ export default function BookPage() {
   const searchParams = useSearchParams();
   const services = useQuery(api.services.list, {});
   const addOns = useQuery(api.addOns.list, {});
-  const createDraftBooking = useAction(api.square.createDraftBooking);
 
   const [step, setStep] = useState<Step>(0);
   const [serviceId, setServiceId] = useState<Id<"services"> | null>(
@@ -69,19 +68,6 @@ export default function BookPage() {
     vehicleInfo: "",
     notes: "",
   });
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  // The Square preload returns everything we need to mount the Web Payments
-  // SDK on step 4: a freshly-minted idempotency key (also used as the URL
-  // token on the success page), the deposit amount, and the public app /
-  // location IDs that initialize the SDK on the client.
-  const [paymentSession, setPaymentSession] = useState<{
-    idempotencyKey: string;
-    depositCents: number;
-    applicationId: string;
-    locationId: string;
-    environment: "sandbox" | "production";
-  } | null>(null);
   // Add-ons selected for the current booking. Stored as IDs; we resolve them
   // to full rows when computing totals + when submitting to the backend.
   const [selectedAddOnIds, setSelectedAddOnIds] = useState<Id<"addOns">[]>([]);
@@ -185,35 +171,13 @@ export default function BookPage() {
     stepperRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [step]);
 
-  async function handleBookAndPay() {
+  // Continue button on the Details step. No server call — the booking row
+  // only gets created after Square approves the charge on the next step.
+  // All required data lives in form state; SquarePaymentForm receives it
+  // as props and invokes confirmAndCharge with everything at Pay time.
+  function handleContinueToPayment() {
     if (!serviceId || !slotStartISO || !selectedService) return;
-    setSubmitting(true);
-    setSubmitError(null);
-    try {
-      const slotStart = new Date(slotStartISO).getTime();
-      // slotEnd must reflect the full appointment duration (service + add-ons)
-      // so the Cal.com booking blocks out the right window and a second
-      // customer can't book on top of the tail end.
-      const slotEnd = slotStart + totalDurationMinutes * 60 * 1000;
-
-      const session = await createDraftBooking({
-        serviceId,
-        slotStart,
-        slotEnd,
-        customerName: details.customerName.trim(),
-        customerEmail: details.customerEmail.trim(),
-        customerPhone: details.customerPhone.trim(),
-        vehicleInfo: details.vehicleInfo.trim(),
-        notes: details.notes.trim() || undefined,
-        addOnIds: selectedAddOnIds.length > 0 ? selectedAddOnIds : undefined,
-      });
-      setPaymentSession(session);
-      setStep(4);
-    } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : "Could not create booking.");
-    } finally {
-      setSubmitting(false);
-    }
+    setStep(4);
   }
 
   return (
@@ -633,32 +597,20 @@ export default function BookPage() {
                       </div>
                     </div>
 
-                    {submitError && (
-                      <p className="text-error text-body-md mb-4">{submitError}</p>
-                    )}
                     <Button
                       variant="primary"
                       size="lg"
                       block
-                      onClick={handleBookAndPay}
+                      onClick={handleContinueToPayment}
                       disabled={
-                        submitting ||
                         !details.customerName ||
                         !details.customerEmail ||
                         !details.customerPhone ||
                         !details.vehicleInfo
                       }
                     >
-                      {submitting ? (
-                        <>
-                          <Loader2 className="animate-spin" size={14} /> Loading...
-                        </>
-                      ) : (
-                        <>
-                          Continue to payment
-                          <ArrowRight size={14} />
-                        </>
-                      )}
+                      Continue to payment
+                      <ArrowRight size={14} />
                     </Button>
                     <p className="text-label-tech text-foreground-muted mt-4 text-center">
                       <Clock size={10} className="inline mr-1" />
@@ -672,7 +624,6 @@ export default function BookPage() {
                     variant="ghost"
                     size="lg"
                     onClick={() => setStep(prevStep(3))}
-                    disabled={submitting}
                   >
                     <ArrowLeft size={14} /> Back
                   </Button>
@@ -680,18 +631,27 @@ export default function BookPage() {
               </div>
             )}
 
-            {step === 4 && selectedService && slotStartISO && paymentSession && (
+            {step === 4 && selectedService && slotStartISO && serviceId && (
               <div key="step-4" className="animate-slide-up">
                 <h2 className="text-headline-lg uppercase mb-8">Payment</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                   <div className="lg:col-span-2">
                     <div className="gloss-card p-4 md:p-6">
                       <SquarePaymentForm
-                        applicationId={paymentSession.applicationId}
-                        locationId={paymentSession.locationId}
-                        environment={paymentSession.environment}
-                        idempotencyKey={paymentSession.idempotencyKey}
-                        depositCents={paymentSession.depositCents}
+                        depositCents={totalDepositCents}
+                        booking={{
+                          serviceId,
+                          slotStart: new Date(slotStartISO).getTime(),
+                          customerName: details.customerName.trim(),
+                          customerEmail: details.customerEmail.trim(),
+                          customerPhone: details.customerPhone.trim(),
+                          vehicleInfo: details.vehicleInfo.trim(),
+                          notes: details.notes.trim() || undefined,
+                          addOnIds:
+                            selectedAddOnIds.length > 0
+                              ? selectedAddOnIds
+                              : undefined,
+                        }}
                       />
                     </div>
                   </div>
@@ -747,10 +707,7 @@ export default function BookPage() {
                   <Button
                     variant="ghost"
                     size="lg"
-                    onClick={() => {
-                      setPaymentSession(null);
-                      setStep(prevStep(4));
-                    }}
+                    onClick={() => setStep(prevStep(4))}
                   >
                     <ArrowLeft size={14} /> Back
                   </Button>

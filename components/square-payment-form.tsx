@@ -1,13 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Script from "next/script";
-import { useAction } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { AlertCircle, Loader2, Lock } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { formatPriceFromCents } from "@/lib/format";
+
+// Booking payload the form forwards to confirmAndCharge along with the
+// freshly-tokenized card source. The server treats this as untrusted input
+// — it re-fetches the service + add-ons by ID, recomputes the deposit, and
+// re-checks the slot before charging — so the form just needs to faithfully
+// echo what the customer chose.
+export type SquareBookingPayload = {
+  serviceId: Id<"services">;
+  slotStart: number;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  vehicleInfo: string;
+  notes?: string;
+  addOnIds?: Id<"addOns">[];
+};
 
 // Embedded Square Web Payments SDK card form. Loads Square's JS, mounts a
 // card element into a div, and on submit tokenizes the card and hands the
@@ -42,20 +59,21 @@ const CARD_STYLE = {
 };
 
 export function SquarePaymentForm({
-  applicationId,
-  locationId,
-  environment,
-  idempotencyKey,
+  booking,
   depositCents,
 }: {
-  applicationId: string;
-  locationId: string;
-  environment: "sandbox" | "production";
-  idempotencyKey: string;
+  booking: SquareBookingPayload;
   depositCents: number;
 }) {
   const router = useRouter();
+  const config = useQuery(api.square.getSquareConfig, {});
   const confirmAndCharge = useAction(api.square.confirmAndCharge);
+
+  // Idempotency key generated once per form mount. Keeping it stable across
+  // re-renders is what makes Square dedupe a Pay-button double-click into a
+  // single charge. Going back to Details and forward again unmounts the
+  // form → new key (intentional: it's a fresh attempt).
+  const idempotencyKey = useMemo(() => `srm-${crypto.randomUUID()}`.slice(0, 45), []);
 
   const [scriptReady, setScriptReady] = useState(false);
   const [cardReady, setCardReady] = useState(false);
@@ -69,9 +87,14 @@ export function SquarePaymentForm({
   // (Square throws if you attach() the same selector twice).
   const initializedRef = useRef(false);
 
+  const applicationId = config?.applicationId;
+  const locationId = config?.locationId;
+  const environment = config?.environment;
+
   useEffect(() => {
     if (!scriptReady || initializedRef.current) return;
     if (typeof window === "undefined" || !window.Square) return;
+    if (!applicationId || !locationId) return;
 
     initializedRef.current = true;
     let destroyed = false;
@@ -124,9 +147,14 @@ export function SquarePaymentForm({
         console.error("Square tokenize failed", result.errors);
         throw new TokenizeError(result.errors ?? []);
       }
+      // Single action call: validate + charge Square + insert booking +
+      // dispatch emails/calendar. The booking row only exists after this
+      // call resolves successfully, so abandoned-checkout drafts never
+      // pile up on the calendar.
       await confirmAndCharge({
         idempotencyKey,
         sourceId: result.token,
+        ...booking,
       });
       router.push(`/book/success?order_no=${encodeURIComponent(idempotencyKey)}`);
     } catch (err) {

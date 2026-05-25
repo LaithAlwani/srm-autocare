@@ -80,40 +80,29 @@ http.route({
       if (!payment?.id || !payment.reference_id) {
         return new Response("bad payment payload", { status: 400 });
       }
-      // Only act on completed payments. Square will fire payment.updated for
-      // CREATED / PENDING transitions too — those are noise for our use case.
+      // Only act on completed payments — Square also fires CREATED /
+      // PENDING transitions for the same payment, which are noise.
       if (payment.status !== "COMPLETED" && payment.status !== "APPROVED") {
         return new Response("ignored (not completed)", { status: 200 });
       }
-      const amountCents = payment.amount_money?.amount ?? 0;
-      // Idempotent — confirmAndCharge has almost certainly already fired.
-      // confirmFromPayment returns isNew=false in that case.
-      const result = await ctx.runMutation(internal.bookings.confirmFromPayment, {
-        idempotencyKey: payment.reference_id,
-        squarePaymentId: payment.id,
-        amountCents,
-      });
-      // Webhook firing first (rare tab-close case) — still need to send
-      // the customer + owner emails and push to Google Calendar. Mirrors
-      // the dispatchPostBooking helper in square.ts.
-      if (result.isNew) {
-        const [, , gcal] = await Promise.allSettled([
-          ctx.runAction(internal.emails.sendBookingConfirmation, {
-            bookingId: result.id,
-          }),
-          ctx.runAction(internal.emails.sendOwnerBookingNotification, {
-            bookingId: result.id,
-          }),
-          ctx.runAction(internal.googleCalendar.createEventInternal, {
-            bookingId: result.id,
-          }),
-        ]);
-        if (gcal.status === "fulfilled" && typeof gcal.value === "string") {
-          await ctx.runMutation(internal.bookings.setGoogleCalendarEventId, {
-            bookingId: result.id,
-            googleCalendarEventId: gcal.value,
-          });
-        }
+      // In the new "save-on-success" flow, the booking is created by
+      // confirmAndCharge AFTER Square approves — so a corresponding row
+      // should already exist by the time this webhook lands. If it does
+      // we're a no-op (just a sanity verification). If it DOESN'T, the
+      // customer's confirmAndCharge call failed at the insert step
+      // (extremely rare: Convex outage mid-action). We can't recreate
+      // the booking from the webhook payload alone because Square never
+      // sees customer/vehicle/notes — the only safe move is to log
+      // loudly and let admin reconcile from the Square dashboard.
+      const booking = await ctx.runQuery(
+        internal.bookings.getInternalBySquareIdempotency,
+        { idempotencyKey: payment.reference_id },
+      );
+      if (!booking) {
+        console.error(
+          `[square webhook] Orphan payment ${payment.id} (ref ${payment.reference_id}) — booking insert may have failed; manual reconciliation needed.`,
+        );
+        return new Response("ok (orphan logged)", { status: 200 });
       }
       return new Response("ok", { status: 200 });
     }

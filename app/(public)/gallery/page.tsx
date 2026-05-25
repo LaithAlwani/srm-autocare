@@ -1,7 +1,5 @@
-"use client";
-
 import Image from "next/image";
-import { useQuery } from "convex/react";
+import { fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
 import { Container } from "@/components/ui/container";
 import { Eyebrow } from "@/components/ui/eyebrow";
@@ -9,14 +7,21 @@ import { BeforeAfterSlider } from "@/components/before-after-slider";
 import { HeroMedia } from "@/components/hero-media";
 import { heroMedia } from "@/config/media";
 
-export default function GalleryPage() {
-  const items = useQuery(api.gallery.list, {});
+// Public gallery — fetched once at request time (server component) and
+// re-fetched every 5 minutes via ISR. Admin adds aren't visible to
+// customers until the next revalidation, which is the right trade-off
+// here: showcase images change rarely and we save a Convex subscription
+// per visitor for the lifetime of the page.
+export const revalidate = 300;
 
-  const beforeAfters = (items ?? []).filter(
+export default async function GalleryPage() {
+  const items = await fetchQuery(api.gallery.list, {});
+
+  const beforeAfters = items.filter(
     (i): i is typeof i & { beforeImageUrl: string } =>
       i.beforeAfter && !!i.beforeImageUrl,
   );
-  const standalones = (items ?? []).filter((i) => !i.beforeAfter || !i.beforeImageUrl);
+  const standalones = items.filter((i) => !i.beforeAfter || !i.beforeImageUrl);
 
   return (
     <div>
@@ -58,15 +63,9 @@ export default function GalleryPage() {
       <section className="section-y">
         <Container>
           <h2 className="text-headline-lg uppercase mb-12">Recent work</h2>
-          {items === undefined ? (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-              {[...Array(8)].map((_, i) => (
-                <div key={i} className="aspect-square gloss-card animate-pulse" />
-              ))}
-            </div>
-          ) : standalones.length === 0 ? (
+          {standalones.length === 0 ? (
             <div className="text-center py-16 text-foreground-muted">
-              <p>No images yet. Upload some in the admin gallery.</p>
+              <p>No images yet. Check back soon.</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">

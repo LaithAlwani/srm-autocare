@@ -174,10 +174,13 @@ async function computeSlots(
   }
   if (candidates.length === 0) return [];
 
-  // 3. Pull confirmed/pending bookings that touch our window and drop any
-  //    candidate whose appointment overlaps with one. The reschedule flow
-  //    passes `excludeBookingId` so the row being moved doesn't block its
-  //    own neighborhood.
+  // 3. Pull *confirmed* bookings that touch our window and drop any
+  //    candidate whose appointment overlaps with one. We deliberately
+  //    DON'T treat pending rows as collisions — pending = customer is
+  //    mid-checkout (or abandoned), nothing's actually paid yet, so we
+  //    don't want them locking up the calendar. The reschedule flow
+  //    passes `excludeBookingId` so the row being moved doesn't block
+  //    its own neighborhood.
   const rows = await ctx.db
     .query("bookings")
     .withIndex("by_slot_start", (q: any) =>
@@ -187,7 +190,7 @@ async function computeSlots(
   const existing = rows.filter(
     (b: { _id: string; status: string; slotStart: number; slotEnd: number }) =>
       b._id !== excludeBookingId &&
-      b.status !== "cancelled" &&
+      b.status === "confirmed" &&
       b.slotStart < dayEndMs &&
       b.slotEnd > dayStartMs,
   );

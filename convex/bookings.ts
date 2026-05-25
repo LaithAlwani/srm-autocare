@@ -77,17 +77,32 @@ export const getForDispatch = internalQuery({
   },
 });
 
-// INTERNAL: insert a draft booking BEFORE the Square card form is shown, so
-// the confirm call + webhook can find it by idempotency key and so the slot
-// is effectively soft-held while the customer is in checkout. Status starts
-// at pending; the cron sweeps abandoned drafts after 30 minutes.
+// Tag thrown errors so the caller (confirmAndCharge action) can distinguish
+// a slot-collision (needs auto-refund) from any other failure (rethrow
+// as-is).
+export const SLOT_COLLISION_ERROR = "SLOT_COLLISION";
+
+// INTERNAL: insert a fully-paid booking AFTER Square approved the charge.
+// Returns `isNew: false` if a row with the same idempotency key already
+// exists (so action retries don't create duplicates) and `isNew: true`
+// otherwise so the caller can gate post-payment side effects (emails,
+// calendar push).
 //
-// `selectedAddOns` is a SNAPSHOT (name/price/duration captured at booking
-// time), not just IDs, so historical bookings stay readable even if the
-// admin later edits or deletes the add-on row.
-export const createDraft = internalMutation({
+// Convex mutations are serializable — only one runs at a time per
+// deployment. We exploit that here: the slot-collision check + insert
+// both happen inside this mutation, so a concurrent booker who passed
+// the action's pre-charge check still gets caught here. Throwing the
+// tagged SLOT_COLLISION error tells confirmAndCharge to auto-refund
+// the just-completed Square payment before surfacing an error to the
+// customer.
+//
+// `selectedAddOns` is a SNAPSHOT (name/price/duration captured at
+// booking time), not just IDs, so historical bookings stay readable
+// even if the admin later edits or deletes the add-on row.
+export const createConfirmedInternal = internalMutation({
   args: {
     squareIdempotencyKey: v.string(),
+    squarePaymentId: v.string(),
     serviceId: v.id("services"),
     slotStart: v.number(),
     slotEnd: v.number(),
@@ -109,8 +124,42 @@ export const createDraft = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("bookings", {
+    // 1. Idempotency dedupe — if an earlier confirmAndCharge attempt
+    //    already landed this booking and a retry is hitting us, return
+    //    the existing row. Pairs with Square's own idempotency dedupe
+    //    on /payments.
+    const existing = await ctx.db
+      .query("bookings")
+      .withIndex("by_square_idempotency_key", (q) =>
+        q.eq("squareIdempotencyKey", args.squareIdempotencyKey),
+      )
+      .unique();
+    if (existing) {
+      return { id: existing._id, isNew: false };
+    }
+
+    // 2. Slot collision check INSIDE the mutation — guaranteed
+    //    serializable. Two concurrent confirmAndCharge calls for the
+    //    same slot will see each other here, and the second one throws.
+    const candidates = await ctx.db
+      .query("bookings")
+      .withIndex("by_slot_start", (q) =>
+        q.gte("slotStart", args.slotStart - 24 * 60 * 60 * 1000),
+      )
+      .take(200);
+    const conflict = candidates.some(
+      (b) =>
+        b.status === "confirmed" &&
+        b.slotStart < args.slotEnd &&
+        b.slotEnd > args.slotStart,
+    );
+    if (conflict) {
+      throw new Error(SLOT_COLLISION_ERROR);
+    }
+
+    const id = await ctx.db.insert("bookings", {
       squareIdempotencyKey: args.squareIdempotencyKey,
+      squarePaymentId: args.squarePaymentId,
       serviceId: args.serviceId,
       slotStart: args.slotStart,
       slotEnd: args.slotEnd,
@@ -121,42 +170,38 @@ export const createDraft = internalMutation({
       notes: args.notes,
       depositAmountCents: args.depositAmountCents,
       selectedAddOns: args.selectedAddOns,
-      paymentStatus: "pending",
-      status: "pending",
+      paymentStatus: "paid",
+      status: "confirmed",
       createdAt: Date.now(),
     });
+    return { id, isNew: true };
   },
 });
 
-// INTERNAL: promote a draft booking to confirmed/paid once Square confirms
-// payment. Idempotent — running twice (once from confirmAndCharge, once from
-// the payment.updated webhook) is safe; only the first call returns
-// isNew=true so the caller can gate post-payment side effects.
-export const confirmFromPayment = internalMutation({
+// INTERNAL: read-only slot collision check used by confirmAndCharge right
+// before it hits Square. Returns true if any *confirmed* booking overlaps
+// the requested [slotStart, slotEnd) window. The reschedule flow can
+// exclude itself; the public booking flow always passes undefined.
+export const slotIsTaken = internalQuery({
   args: {
-    idempotencyKey: v.string(),
-    squarePaymentId: v.string(),
-    amountCents: v.number(),
+    slotStart: v.number(),
+    slotEnd: v.number(),
+    excludeBookingId: v.optional(v.id("bookings")),
   },
   handler: async (ctx, args) => {
-    const booking = await ctx.db
+    const rows = await ctx.db
       .query("bookings")
-      .withIndex("by_square_idempotency_key", (q) =>
-        q.eq("squareIdempotencyKey", args.idempotencyKey),
+      .withIndex("by_slot_start", (q) =>
+        q.gte("slotStart", args.slotStart - 24 * 60 * 60 * 1000),
       )
-      .unique();
-    if (!booking) {
-      throw new Error(`No draft booking for Square idempotency key ${args.idempotencyKey}`);
-    }
-    if (booking.paymentStatus === "paid" || booking.status === "confirmed") {
-      return { id: booking._id, isNew: false };
-    }
-    await ctx.db.patch(booking._id, {
-      squarePaymentId: args.squarePaymentId,
-      paymentStatus: "paid",
-      status: "confirmed",
-    });
-    return { id: booking._id, isNew: true };
+      .take(200);
+    return rows.some(
+      (b) =>
+        b._id !== args.excludeBookingId &&
+        b.status === "confirmed" &&
+        b.slotStart < args.slotEnd &&
+        b.slotEnd > args.slotStart,
+    );
   },
 });
 
