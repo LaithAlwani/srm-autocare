@@ -466,7 +466,7 @@ export default function BookPage() {
                             active ? "border-primary glow-blue-soft text-primary" : ""
                           }`}
                         >
-                          {new Date(iso).toLocaleTimeString("en-CA", {
+                          {new Date(iso).toLocaleTimeString("en-US", {
                             hour: "numeric",
                             minute: "2-digit",
                           })}
@@ -572,7 +572,7 @@ export default function BookPage() {
                       />
                       <SummaryRow
                         label="Time"
-                        value={new Date(slotStartISO).toLocaleTimeString("en-CA", {
+                        value={new Date(slotStartISO).toLocaleTimeString("en-US", {
                           hour: "numeric",
                           minute: "2-digit",
                         })}
@@ -679,7 +679,7 @@ export default function BookPage() {
                       )}
                       <SummaryRow
                         label="When"
-                        value={new Date(slotStartISO).toLocaleString("en-CA", {
+                        value={new Date(slotStartISO).toLocaleString("en-US", {
                           weekday: "short",
                           month: "short",
                           day: "numeric",

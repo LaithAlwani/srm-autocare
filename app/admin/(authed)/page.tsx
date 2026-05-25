@@ -2,7 +2,19 @@
 
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import { ArrowRight, CalendarCheck, CalendarDays, Image as ImageIcon, Sparkles } from "lucide-react";
+import {
+  ArrowDownRight,
+  ArrowRight,
+  ArrowUpRight,
+  CalendarCheck,
+  CalendarDays,
+  DollarSign,
+  Image as ImageIcon,
+  Minus,
+  PieChart,
+  Sparkles,
+  TrendingUp,
+} from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { formatDateTime, formatPriceFromCents } from "@/lib/format";
@@ -12,32 +24,71 @@ export default function AdminDashboard() {
   const services = useQuery(api.services.list, { includeInactive: true });
   const gallery = useQuery(api.gallery.list, {});
   const bookings = useQuery(api.bookings.listForAdmin, { limit: 50 });
-
-  const now = Date.now();
-  const startOfTomorrow = new Date(now);
-  startOfTomorrow.setHours(0, 0, 0, 0);
-  startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
-
-  const todayBookings = (bookings ?? []).filter(
-    (b) =>
-      b.status === "confirmed" &&
-      b.slotStart >= now &&
-      b.slotStart < startOfTomorrow.getTime(),
-  ).length;
-  const upcoming = (bookings ?? []).filter(
-    (b) => b.status === "confirmed" && b.slotStart > Date.now(),
-  ).length;
+  const stats = useQuery(api.bookings.getDashboardStats, {});
 
   return (
     <div>
       <Eyebrow className="mb-3">Overview</Eyebrow>
       <h1 className="text-headline-lg uppercase mb-10">Dashboard</h1>
 
+      {/* Operating stats — today + week-over-week. Compact tiles with
+          trend arrows that compare against the previous period. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 mb-6">
+        <RevenueTile
+          label="Revenue today"
+          icon={DollarSign}
+          current={stats?.today.revenueCents}
+          previous={stats?.yesterday.revenueCents}
+          previousLabel="yesterday"
+          accent
+        />
+        <RevenueTile
+          label="Revenue this week"
+          icon={TrendingUp}
+          current={stats?.thisWeek.revenueCents}
+          previous={stats?.lastWeek.revenueCents}
+          previousLabel="last week"
+        />
+        <CountTile
+          label="Bookings today"
+          icon={CalendarDays}
+          current={stats?.today.bookings}
+          previous={stats?.yesterday.bookings}
+          previousLabel="yesterday"
+        />
+        <UtilizationTile
+          label="Slot utilization"
+          icon={PieChart}
+          stats={stats?.today}
+        />
+      </div>
+
+      {/* Catalog / health stats — slower-changing, no comparisons. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 mb-12">
-        <Stat label="Active services" value={services?.filter((s) => s.active).length ?? "—"} icon={Sparkles} />
-        <Stat label="Gallery items" value={gallery?.length ?? "—"} icon={ImageIcon} />
-        <Stat label="Today" value={todayBookings} icon={CalendarDays} accent />
-        <Stat label="Upcoming" value={upcoming} icon={CalendarCheck} />
+        <CountTile
+          label="Active services"
+          icon={Sparkles}
+          current={services?.filter((s) => s.active).length}
+        />
+        <CountTile label="Gallery items" icon={ImageIcon} current={gallery?.length} />
+        <CountTile
+          label="Upcoming bookings"
+          icon={CalendarCheck}
+          current={
+            bookings === undefined
+              ? undefined
+              : bookings.filter(
+                  (b) => b.status === "confirmed" && b.slotStart > Date.now(),
+                ).length
+          }
+        />
+        <CountTile
+          label="Bookings this week"
+          icon={CalendarDays}
+          current={stats?.thisWeek.bookings}
+          previous={stats?.lastWeek.bookings}
+          previousLabel="last week"
+        />
       </div>
 
       <div className="gloss-card">
@@ -56,9 +107,6 @@ export default function AdminDashboard() {
           <div className="p-6 text-foreground-muted">No bookings yet.</div>
         ) : (
           <>
-            {/* Desktop: condensed table — Customer / When+Service / Status / Deposit.
-                Booked-time + service moved into the When cell so the dashboard
-                preview stays scannable in narrow content widths beside the sidebar. */}
             <table className="hidden md:table w-full table-fixed">
               <thead>
                 <tr className="text-label-tech text-foreground-muted border-b border-border">
@@ -94,7 +142,6 @@ export default function AdminDashboard() {
               </tbody>
             </table>
 
-            {/* Mobile: compact cards */}
             <ul className="md:hidden divide-y divide-border">
               {bookings.map((b) => (
                 <li key={b._id} className="p-4 space-y-3">
@@ -128,15 +175,126 @@ export default function AdminDashboard() {
   );
 }
 
-function Stat({
+// ───────────────────────────────────────────────────────────────────────────
+// Stat tiles
+// ───────────────────────────────────────────────────────────────────────────
+
+function RevenueTile({
   label,
-  value,
-  icon: Icon,
+  icon,
+  current,
+  previous,
+  previousLabel,
   accent,
 }: {
   label: string;
-  value: string | number;
   icon: React.ElementType;
+  current: number | undefined;
+  previous: number | undefined;
+  previousLabel: string;
+  accent?: boolean;
+}) {
+  return (
+    <TileShell label={label} icon={icon} accent={accent}>
+      <p className={`text-display ${accent ? "text-primary" : "text-foreground"}`}>
+        {current === undefined ? "—" : formatPriceFromCents(current)}
+      </p>
+      <TrendLine
+        current={current}
+        previous={previous}
+        previousLabel={previousLabel}
+        format={(n) => formatPriceFromCents(Math.abs(n))}
+      />
+    </TileShell>
+  );
+}
+
+function CountTile({
+  label,
+  icon,
+  current,
+  previous,
+  previousLabel,
+}: {
+  label: string;
+  icon: React.ElementType;
+  current: number | undefined;
+  previous?: number;
+  previousLabel?: string;
+}) {
+  return (
+    <TileShell label={label} icon={icon}>
+      <p className="text-display text-foreground">{current ?? "—"}</p>
+      {previous !== undefined && previousLabel ? (
+        <TrendLine
+          current={current}
+          previous={previous}
+          previousLabel={previousLabel}
+          format={(n) => String(Math.abs(n))}
+        />
+      ) : null}
+    </TileShell>
+  );
+}
+
+function UtilizationTile({
+  label,
+  icon,
+  stats,
+}: {
+  label: string;
+  icon: React.ElementType;
+  stats:
+    | {
+        utilizationPercent: number;
+        bookedMinutes: number;
+        availableMinutes: number;
+        totalMinutes: number;
+        isOpen: boolean;
+      }
+    | undefined;
+}) {
+  return (
+    <TileShell label={label} icon={icon}>
+      {stats === undefined ? (
+        <p className="text-display text-foreground">—</p>
+      ) : !stats.isOpen ? (
+        <>
+          <p className="text-display text-foreground-muted">CLOSED</p>
+          <p className="text-label-tech text-foreground-muted mt-2">No hours today</p>
+        </>
+      ) : (
+        <>
+          <p className="text-display text-foreground">
+            {stats.utilizationPercent}
+            <span className="text-headline-md text-foreground-muted">%</span>
+          </p>
+          {/* Bar so the percent has visual weight. */}
+          <div className="h-1 bg-surface-container-low mt-3 mb-2 overflow-hidden">
+            <div
+              className="h-full bg-primary glow-blue-soft transition-all duration-500"
+              style={{ width: `${stats.utilizationPercent}%` }}
+            />
+          </div>
+          <p className="text-label-tech text-foreground-muted">
+            {formatMinutes(stats.bookedMinutes)} booked ·{" "}
+            {formatMinutes(stats.availableMinutes)} free
+          </p>
+        </>
+      )}
+    </TileShell>
+  );
+}
+
+function TileShell({
+  label,
+  icon: Icon,
+  children,
+  accent,
+}: {
+  label: string;
+  icon: React.ElementType;
+  children: React.ReactNode;
   accent?: boolean;
 }) {
   return (
@@ -145,9 +303,68 @@ function Stat({
         <span className="text-label-tech text-foreground-muted">{label}</span>
         <Icon size={16} className={accent ? "text-primary" : "text-foreground-muted"} />
       </div>
-      <p className={`text-display ${accent ? "text-primary" : "text-foreground"}`}>{value}</p>
+      {children}
     </div>
   );
+}
+
+// Up / down arrow + delta line under each stat tile. Handles the
+// edge cases:
+//   - current and previous both zero → neutral, "no change"
+//   - previous zero (new!) → up arrow, "new"
+//   - undefined (still loading) → render nothing
+function TrendLine({
+  current,
+  previous,
+  previousLabel,
+  format,
+}: {
+  current: number | undefined;
+  previous: number | undefined;
+  previousLabel: string;
+  format: (n: number) => string;
+}) {
+  if (current === undefined || previous === undefined) {
+    return <p className="text-label-tech text-foreground-muted mt-2">vs {previousLabel}</p>;
+  }
+  const diff = current - previous;
+
+  let tone: "up" | "down" | "flat";
+  let label: string;
+  if (diff === 0) {
+    tone = "flat";
+    label = "no change";
+  } else if (previous === 0) {
+    tone = "up";
+    label = "new";
+  } else {
+    tone = diff > 0 ? "up" : "down";
+    const pct = Math.round((diff / previous) * 100);
+    label = `${format(diff)} (${Math.abs(pct)}%)`;
+  }
+
+  const Icon = tone === "up" ? ArrowUpRight : tone === "down" ? ArrowDownRight : Minus;
+  const color =
+    tone === "up"
+      ? "text-success"
+      : tone === "down"
+        ? "text-error"
+        : "text-foreground-muted";
+
+  return (
+    <p className={`text-label-tech mt-2 flex items-center gap-1 ${color}`}>
+      <Icon size={12} strokeWidth={2} />
+      <span>{label}</span>
+      <span className="text-foreground-muted">vs {previousLabel}</span>
+    </p>
+  );
+}
+
+function formatMinutes(min: number): string {
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
 export function StatusChip({ status }: { status: string }) {

@@ -47,6 +47,13 @@ export const setBusinessHours = mutation({
       }),
     ),
     blackoutDates: v.array(v.string()),
+    blackoutRanges: v.array(
+      v.object({
+        dateISO: v.string(),
+        startHHMM: v.string(),
+        endHHMM: v.string(),
+      }),
+    ),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
@@ -195,12 +202,27 @@ async function computeSlots(
       b.slotEnd > dayStartMs,
   );
 
+  // 4. Resolve any partial-day blackouts for this date into epoch ranges.
+  //    Treated exactly like an existing booking for collision purposes.
+  const blockedRanges = hours.blackoutRanges
+    .filter((r) => r.dateISO === dateISO)
+    .map((r) => ({
+      start: epochAt(dateISO, r.startHHMM, hours.timeZone),
+      end: epochAt(dateISO, r.endHHMM, hours.timeZone),
+    }))
+    .filter((r) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start);
+
   const free = candidates.filter((start) => {
     const end = start + appointmentMs;
-    return !existing.some(
+    const overlapsBooking = existing.some(
       (b: { slotStart: number; slotEnd: number }) =>
         b.slotStart < end && b.slotEnd > start,
     );
+    if (overlapsBooking) return false;
+    const overlapsBlackout = blockedRanges.some(
+      (r) => r.start < end && r.end > start,
+    );
+    return !overlapsBlackout;
   });
 
   return free.map((ms) => new Date(ms).toISOString());

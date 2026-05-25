@@ -37,7 +37,9 @@ function loadResend(): { client: Resend; from: string } | null {
 }
 
 function formatDateTime(ts: number): string {
-  return new Date(ts).toLocaleString("en-CA", {
+  // en-US locale → 12-hour AM/PM output. Same convention used everywhere
+  // else on the site so customer emails read the same as the booking page.
+  return new Date(ts).toLocaleString("en-US", {
     timeZone: TZ,
     weekday: "long",
     month: "long",

@@ -10,6 +10,14 @@ import {
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin } from "./users";
+import { computeDepositCents } from "../lib/booking";
+import {
+  resolveBusinessHours,
+  parseHHMM,
+  dayKey,
+  weekdayInZone,
+  epochAt,
+} from "../lib/businessHours";
 
 // Status enums kept in one place so every validator on this file stays in sync.
 const STATUS_LITERALS = [
@@ -175,6 +183,179 @@ export const createConfirmedInternal = internalMutation({
       createdAt: Date.now(),
     });
     return { id, isNew: true };
+  },
+});
+
+// INTERNAL: insert mutation for the admin-manual "new booking" flow.
+// Same serializable slot-collision guard as createConfirmedInternal so
+// admin entries can't double-book on top of a customer who just paid
+// online. No idempotency key (admin doesn't generate one) and no Square
+// payment id — paymentStatus reflects whatever the admin recorded.
+export const adminCreateBookingInternal = internalMutation({
+  args: {
+    serviceId: v.id("services"),
+    slotStart: v.number(),
+    slotEnd: v.number(),
+    customerName: v.string(),
+    customerEmail: v.string(),
+    customerPhone: v.string(),
+    vehicleInfo: v.string(),
+    notes: v.optional(v.string()),
+    depositAmountCents: v.number(),
+    paymentStatus: v.union(v.literal("paid"), v.literal("pending")),
+    selectedAddOns: v.optional(
+      v.array(
+        v.object({
+          id: v.id("addOns"),
+          name: v.string(),
+          priceCents: v.number(),
+          durationMinutes: v.number(),
+        }),
+      ),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const candidates = await ctx.db
+      .query("bookings")
+      .withIndex("by_slot_start", (q) =>
+        q.gte("slotStart", args.slotStart - 24 * 60 * 60 * 1000),
+      )
+      .take(200);
+    const conflict = candidates.some(
+      (b) =>
+        b.status === "confirmed" &&
+        b.slotStart < args.slotEnd &&
+        b.slotEnd > args.slotStart,
+    );
+    if (conflict) {
+      throw new Error(SLOT_COLLISION_ERROR);
+    }
+
+    return await ctx.db.insert("bookings", {
+      serviceId: args.serviceId,
+      slotStart: args.slotStart,
+      slotEnd: args.slotEnd,
+      customerName: args.customerName,
+      customerEmail: args.customerEmail,
+      customerPhone: args.customerPhone,
+      vehicleInfo: args.vehicleInfo,
+      notes: args.notes,
+      depositAmountCents: args.depositAmountCents,
+      selectedAddOns: args.selectedAddOns,
+      paymentStatus: args.paymentStatus,
+      status: "confirmed",
+      createdAt: Date.now(),
+    });
+  },
+});
+
+// ADMIN: create a booking manually from the admin UI — walk-ins, phone
+// bookings, owner-blocked time, etc. No Square interaction. Optional
+// `sendConfirmationEmail` controls whether the customer gets the
+// branded confirmation (admin might want a silent booking for blocking
+// off time). Google Calendar push always fires (assuming the
+// integration is connected) so the owner's calendar stays accurate.
+export const adminCreateBooking = action({
+  args: {
+    serviceId: v.id("services"),
+    slotStartISO: v.string(),
+    customerName: v.string(),
+    customerEmail: v.string(),
+    customerPhone: v.string(),
+    vehicleInfo: v.string(),
+    notes: v.optional(v.string()),
+    addOnIds: v.optional(v.array(v.id("addOns"))),
+    // Optional override — when omitted we use the standard 33% rule.
+    // Admin can set 0 for a comped booking.
+    depositAmountCentsOverride: v.optional(v.number()),
+    // "paid" = admin collected (cash/etransfer/etc). "pending" = will
+    // collect at appointment. Defaults to "paid".
+    paymentStatus: v.optional(v.union(v.literal("paid"), v.literal("pending"))),
+    sendConfirmationEmail: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<{ ok: true; bookingId: Id<"bookings"> }> => {
+    const me = await ctx.runQuery(api.users.currentUser);
+    if (!me || (me.role !== "owner" && me.role !== "admin")) {
+      throw new Error("Not authorized");
+    }
+
+    const service = await ctx.runQuery(api.services.get, { id: args.serviceId });
+    if (!service) throw new Error("Service not found");
+
+    const addOnRows =
+      args.addOnIds && args.addOnIds.length > 0
+        ? await ctx.runQuery(internal.addOns.getMany, { ids: args.addOnIds })
+        : [];
+    const selectedAddOns = addOnRows.map((row) => ({
+      id: row._id,
+      name: row.name,
+      priceCents: row.priceCents,
+      durationMinutes: row.durationMinutes,
+    }));
+    const addOnsTotalCents = selectedAddOns.reduce((sum, a) => sum + a.priceCents, 0);
+    const addOnsTotalMinutes = selectedAddOns.reduce(
+      (sum, a) => sum + a.durationMinutes,
+      0,
+    );
+
+    const totalCents = service.priceFromCents + addOnsTotalCents;
+    const depositAmountCents =
+      args.depositAmountCentsOverride !== undefined
+        ? args.depositAmountCentsOverride
+        : computeDepositCents(totalCents);
+
+    const slotStart = new Date(args.slotStartISO).getTime();
+    if (!Number.isFinite(slotStart)) throw new Error("Invalid slotStartISO");
+    const slotEnd =
+      slotStart + (service.durationMinutes + addOnsTotalMinutes) * 60 * 1000;
+
+    let bookingId: Id<"bookings">;
+    try {
+      bookingId = await ctx.runMutation(
+        internal.bookings.adminCreateBookingInternal,
+        {
+          serviceId: args.serviceId,
+          slotStart,
+          slotEnd,
+          customerName: args.customerName.trim(),
+          customerEmail: args.customerEmail.trim(),
+          customerPhone: args.customerPhone.trim(),
+          vehicleInfo: args.vehicleInfo.trim(),
+          notes: args.notes?.trim() || undefined,
+          depositAmountCents,
+          paymentStatus: args.paymentStatus ?? "paid",
+          selectedAddOns: selectedAddOns.length > 0 ? selectedAddOns : undefined,
+        },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes(SLOT_COLLISION_ERROR)) {
+        throw new Error(
+          "That slot already has a confirmed booking. Pick another time or cancel the existing one first.",
+        );
+      }
+      throw err;
+    }
+
+    // Fan out post-booking side effects:
+    //   - confirmation email (admin can suppress for silent bookings)
+    //   - Google Calendar push (always, so owner's calendar stays accurate)
+    // Owner notification is skipped because the admin is the owner —
+    // emailing themselves about a booking they just created is noise.
+    const [, gcal] = await Promise.allSettled([
+      args.sendConfirmationEmail === false
+        ? Promise.resolve()
+        : ctx.runAction(internal.emails.sendBookingConfirmation, { bookingId }),
+      ctx.runAction(internal.googleCalendar.createEventInternal, { bookingId }),
+    ]);
+    if (gcal.status === "fulfilled" && typeof gcal.value === "string") {
+      await ctx.runMutation(internal.bookings.setGoogleCalendarEventId, {
+        bookingId,
+        googleCalendarEventId: gcal.value,
+      });
+    }
+
+    return { ok: true, bookingId };
   },
 });
 
@@ -521,6 +702,127 @@ export const updateStatus = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     await ctx.db.patch(args.id, { status: args.status });
+  },
+});
+
+// ADMIN: aggregate dashboard stats — bookings + revenue for today vs
+// yesterday, this week vs last week, plus today's slot utilization
+// percentage. Revenue is the full appointment value (service price +
+// add-ons), NOT the deposit collected, because the dashboard's job is
+// to show how much the shop earned, not how much sat in escrow.
+export const getDashboardStats = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+
+    const hoursRow = await ctx.db
+      .query("siteContent")
+      .withIndex("by_key", (q) => q.eq("key", "businessHours"))
+      .unique();
+    const hours = resolveBusinessHours(hoursRow?.value);
+
+    // Today + comparison windows, all in the business TZ so "today"
+    // means what the shop owner thinks today means.
+    const now = Date.now();
+    const todayKey = dayKey(hours.timeZone, now);
+    const todayStart = epochAt(todayKey, "00:00", hours.timeZone);
+    const todayEnd = todayStart + 24 * 60 * 60 * 1000;
+    const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+    const yesterdayEnd = todayStart;
+    const thisWeekStart = todayEnd - 7 * 24 * 60 * 60 * 1000;
+    const thisWeekEnd = todayEnd;
+    const lastWeekStart = thisWeekStart - 7 * 24 * 60 * 60 * 1000;
+    const lastWeekEnd = thisWeekStart;
+
+    // Pull a generous batch covering the lookback window. The by_slot_start
+    // index gives us cheap range scans; we filter status + add-on revenue
+    // in JS. 14 days of bookings for a single-bay shop fits well under
+    // any reasonable limit.
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_slot_start", (q) => q.gte("slotStart", lastWeekStart))
+      .take(500);
+    const confirmed = rows.filter((b) => b.status === "confirmed");
+
+    // Service prices are needed to compute total appointment value.
+    // Cache lookups so a popular service isn't re-fetched per booking.
+    const servicePriceCache = new Map<string, number>();
+    async function priceFor(serviceId: Id<"services">): Promise<number> {
+      const cached = servicePriceCache.get(serviceId);
+      if (cached !== undefined) return cached;
+      const service = await ctx.db.get(serviceId);
+      const price = service?.priceFromCents ?? 0;
+      servicePriceCache.set(serviceId, price);
+      return price;
+    }
+
+    type Bucket = { bookings: number; revenueCents: number };
+    const empty = (): Bucket => ({ bookings: 0, revenueCents: 0 });
+    const today = empty();
+    const yesterday = empty();
+    const thisWeek = empty();
+    const lastWeek = empty();
+    let bookedMinutesToday = 0;
+
+    for (const b of confirmed) {
+      const addOnsTotal = (b.selectedAddOns ?? []).reduce(
+        (sum, a) => sum + a.priceCents,
+        0,
+      );
+      const fullCents = (await priceFor(b.serviceId)) + addOnsTotal;
+      if (b.slotStart >= todayStart && b.slotStart < todayEnd) {
+        today.bookings++;
+        today.revenueCents += fullCents;
+        bookedMinutesToday += Math.round((b.slotEnd - b.slotStart) / 60000);
+      }
+      if (b.slotStart >= yesterdayStart && b.slotStart < yesterdayEnd) {
+        yesterday.bookings++;
+        yesterday.revenueCents += fullCents;
+      }
+      if (b.slotStart >= thisWeekStart && b.slotStart < thisWeekEnd) {
+        thisWeek.bookings++;
+        thisWeek.revenueCents += fullCents;
+      }
+      if (b.slotStart >= lastWeekStart && b.slotStart < lastWeekEnd) {
+        lastWeek.bookings++;
+        lastWeek.revenueCents += fullCents;
+      }
+    }
+
+    // Slot utilization today — booked minutes vs total business-hours
+    // minutes for today's weekday. If today is closed (Sunday by
+    // default) or blacked out, total is 0 and we report 100% to avoid
+    // a divide-by-zero "0%" that looks like an empty calendar.
+    const weekday = weekdayInZone(hours.timeZone, now);
+    const schedule = hours.weekly.find((d) => d.day === weekday);
+    const openMin = parseHHMM(schedule?.open ?? null);
+    const closeMin = parseHHMM(schedule?.close ?? null);
+    const isBlackout = hours.blackoutDates.includes(todayKey);
+    const dayMinutesTotal =
+      isBlackout || openMin === null || closeMin === null || closeMin <= openMin
+        ? 0
+        : closeMin - openMin;
+    const utilizationPercent =
+      dayMinutesTotal === 0
+        ? 100
+        : Math.min(
+            100,
+            Math.round((bookedMinutesToday / dayMinutesTotal) * 100),
+          );
+
+    return {
+      today: {
+        ...today,
+        bookedMinutes: bookedMinutesToday,
+        availableMinutes: Math.max(0, dayMinutesTotal - bookedMinutesToday),
+        totalMinutes: dayMinutesTotal,
+        utilizationPercent,
+        isOpen: dayMinutesTotal > 0,
+      },
+      yesterday,
+      thisWeek,
+      lastWeek,
+    };
   },
 });
 

@@ -173,7 +173,7 @@ export function RescheduleModal({
                           active ? "border-primary glow-blue-soft text-primary" : ""
                         }`}
                       >
-                        {new Date(iso).toLocaleTimeString("en-CA", {
+                        {new Date(iso).toLocaleTimeString("en-US", {
                           hour: "numeric",
                           minute: "2-digit",
                         })}

@@ -2,15 +2,17 @@
 
 import { useState } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { Ban, CalendarClock, History, Mail, Phone, Undo2 } from "lucide-react";
+import { Ban, CalendarClock, History, Mail, Phone, Plus, Undo2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Eyebrow } from "@/components/ui/eyebrow";
+import { Button } from "@/components/ui/button";
 import { formatDateTime, formatDuration, formatPriceFromCents } from "@/lib/format";
 import { RelativeTime } from "@/components/relative-time";
 import { RescheduleModal } from "@/components/admin/reschedule-modal";
 import { ConfirmModal } from "@/components/admin/confirm-modal";
 import { RefundModal } from "@/components/admin/refund-modal";
+import { NewBookingModal } from "@/components/admin/new-booking-modal";
 import { DateScroller } from "@/components/ui/date-scroller";
 
 // Note: `pending` deliberately excluded — those rows are mid-checkout drafts
@@ -99,6 +101,7 @@ export default function AdminBookingsPage() {
   const [rescheduleTarget, setRescheduleTarget] = useState<RescheduleTarget | null>(null);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
   const [refundTarget, setRefundTarget] = useState<RefundTarget | null>(null);
+  const [newBookingOpen, setNewBookingOpen] = useState(false);
 
   function changeStatus(
     booking: { _id: Id<"bookings">; customerName: string; serviceName: string; slotStart: number },
@@ -118,8 +121,15 @@ export default function AdminBookingsPage() {
 
   return (
     <div>
-      <Eyebrow className="mb-3">Operations</Eyebrow>
-      <h1 className="text-headline-lg uppercase mb-8">Bookings</h1>
+      <div className="flex justify-between items-end gap-3 flex-wrap mb-8">
+        <div>
+          <Eyebrow className="mb-3">Operations</Eyebrow>
+          <h1 className="text-headline-lg uppercase">Bookings</h1>
+        </div>
+        <Button variant="primary" size="md" onClick={() => setNewBookingOpen(true)}>
+          <Plus size={14} /> New booking
+        </Button>
+      </div>
 
       {/* Calendar strip — defaults to today. The "All upcoming" pill
           clears the date scope entirely and shows the date-agnostic
@@ -227,7 +237,7 @@ export default function AdminBookingsPage() {
                       b.rescheduledAt && (
                         <span
                           className="inline-flex items-center gap-1 text-label-tech px-2 py-1 border border-primary/40 text-primary bg-primary/10"
-                          title={`Rescheduled ${new Date(b.rescheduledAt).toLocaleString()}`}
+                          title={`Rescheduled ${formatDateTime(b.rescheduledAt)}`}
                         >
                           <History size={10} /> RESCHEDULED
                         </span>
@@ -382,6 +392,10 @@ export default function AdminBookingsPage() {
           serviceName={rescheduleTarget.serviceName}
           onClose={() => setRescheduleTarget(null)}
         />
+      )}
+
+      {newBookingOpen && (
+        <NewBookingModal onClose={() => setNewBookingOpen(false)} />
       )}
 
       {cancelTarget && (

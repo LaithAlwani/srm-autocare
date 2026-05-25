@@ -90,6 +90,7 @@ function BusinessHoursSection() {
         bookingWindowDays: draft.bookingWindowDays,
         weekly: draft.weekly,
         blackoutDates: draft.blackoutDates,
+        blackoutRanges: draft.blackoutRanges,
       });
       setSavedAt(Date.now());
     } catch (err) {
@@ -241,6 +242,13 @@ function BusinessHoursSection() {
         </div>
       </div>
 
+      <BlockedRanges
+        ranges={draft.blackoutRanges}
+        onChange={(next) =>
+          setDraft((cur) => (cur ? { ...cur, blackoutRanges: next } : cur))
+        }
+      />
+
       <p className="text-label-tech text-foreground-muted mt-6">
         Time zone:{" "}
         <span className="font-mono-tech text-foreground">{draft.timeZone}</span>
@@ -248,6 +256,145 @@ function BusinessHoursSection() {
 
       {error && <p className="text-error text-body-md mt-4">{error}</p>}
     </section>
+  );
+}
+
+// Partial-day blackouts — e.g. "block 12-1 PM on May 22 for lunch". Each
+// row stores a date + start + end. The slot generator drops any candidate
+// whose appointment overlaps the range, just like an existing booking.
+function BlockedRanges({
+  ranges,
+  onChange,
+}: {
+  ranges: BusinessHours["blackoutRanges"];
+  onChange: (next: BusinessHours["blackoutRanges"]) => void;
+}) {
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const [date, setDate] = useState(today);
+  const [start, setStart] = useState("12:00");
+  const [end, setEnd] = useState("13:00");
+  const [err, setErr] = useState<string | null>(null);
+
+  function add() {
+    if (!date || !start || !end) {
+      setErr("Date, start, and end are all required.");
+      return;
+    }
+    if (start >= end) {
+      setErr("End time must be after start time.");
+      return;
+    }
+    // Drop accidental exact-duplicates.
+    const dupe = ranges.some(
+      (r) => r.dateISO === date && r.startHHMM === start && r.endHHMM === end,
+    );
+    if (dupe) {
+      setErr("That range is already blocked.");
+      return;
+    }
+    setErr(null);
+    onChange(
+      [...ranges, { dateISO: date, startHHMM: start, endHHMM: end }].sort(
+        (a, b) =>
+          a.dateISO.localeCompare(b.dateISO) || a.startHHMM.localeCompare(b.startHHMM),
+      ),
+    );
+  }
+
+  function remove(target: BusinessHours["blackoutRanges"][number]) {
+    onChange(
+      ranges.filter(
+        (r) =>
+          !(
+            r.dateISO === target.dateISO &&
+            r.startHHMM === target.startHHMM &&
+            r.endHHMM === target.endHHMM
+          ),
+      ),
+    );
+  }
+
+  return (
+    <div className="mt-8">
+      <h3 className="text-label-tech text-foreground-muted mb-3">
+        Blocked time ranges
+      </h3>
+      <p className="text-body-md text-foreground-muted mb-4">
+        Block a specific time window on a specific day (lunch, supplier
+        visit, equipment maintenance). Customers won't see any slots that
+        overlap the range. For an entire day off, use Blackout dates above.
+      </p>
+
+      {ranges.length > 0 && (
+        <ul className="space-y-2 mb-4">
+          {ranges.map((r) => (
+            <li
+              key={`${r.dateISO}-${r.startHHMM}-${r.endHHMM}`}
+              className="flex items-center gap-3 text-body-md p-3 border border-border bg-surface-container-lowest"
+            >
+              <span className="font-mono-tech text-foreground">{r.dateISO}</span>
+              <span className="text-foreground-muted">·</span>
+              <span className="font-mono-tech text-foreground">
+                {r.startHHMM} – {r.endHHMM}
+              </span>
+              <button
+                type="button"
+                aria-label="Remove blocked range"
+                onClick={() => remove(r)}
+                className="ml-auto text-foreground-muted hover:text-error"
+              >
+                <X size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="text-label-tech text-foreground-muted block mb-1">
+            Date
+          </label>
+          <input
+            type="date"
+            value={date}
+            min={today}
+            onChange={(e) => setDate(e.target.value)}
+            className="bg-surface-container px-3 py-2 text-body-md text-foreground border-0 border-b border-chrome focus:outline-none focus:border-primary"
+          />
+        </div>
+        <div>
+          <label className="text-label-tech text-foreground-muted block mb-1">
+            From
+          </label>
+          <input
+            type="time"
+            value={start}
+            onChange={(e) => setStart(e.target.value)}
+            className="bg-surface-container px-3 py-2 text-body-md text-foreground border-0 border-b border-chrome focus:outline-none focus:border-primary"
+          />
+        </div>
+        <div>
+          <label className="text-label-tech text-foreground-muted block mb-1">
+            To
+          </label>
+          <input
+            type="time"
+            value={end}
+            onChange={(e) => setEnd(e.target.value)}
+            className="bg-surface-container px-3 py-2 text-body-md text-foreground border-0 border-b border-chrome focus:outline-none focus:border-primary"
+          />
+        </div>
+        <Button variant="secondary" size="sm" onClick={add}>
+          <Plus size={12} /> Block range
+        </Button>
+      </div>
+
+      {err && <p className="text-error text-body-md mt-3">{err}</p>}
+      <p className="text-label-tech text-foreground-muted mt-3">
+        Changes apply when you click Save changes above.
+      </p>
+    </div>
   );
 }
 

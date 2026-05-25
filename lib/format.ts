@@ -15,7 +15,10 @@ export function formatDuration(minutes: number): string {
 }
 
 export function formatDateTime(ts: number): string {
-  return new Date(ts).toLocaleString("en-CA", {
+  // en-US locale forces 12-hour AM/PM output. en-CA defaults to 24-hour
+  // which the shop owner explicitly didn't want. Date parts (weekday /
+  // month / day) render identically in both locales for our options.
+  return new Date(ts).toLocaleString("en-US", {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -49,7 +52,7 @@ export function formatRelativeTime(ts: number, now: number = Date.now()): string
   const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
   const startOfThen = new Date(then.getFullYear(), then.getMonth(), then.getDate()).getTime();
   const dayDiff = Math.round((startOfToday - startOfThen) / 86_400_000);
-  const time = then.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+  const time = then.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
   if (dayDiff === 0) return `today at ${time}`;
   if (dayDiff === 1) return `yesterday at ${time}`;

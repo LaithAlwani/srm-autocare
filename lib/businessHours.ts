@@ -14,13 +14,25 @@ export type DaySchedule = {
   close: string | null;
 };
 
+// Partial-day blackout — a single time range on a specific date that
+// behaves like an existing booking for the slot generator (any candidate
+// whose appointment overlaps it gets dropped). Use for lunch breaks,
+// equipment maintenance, supplier visits, etc. Full-day closures still
+// live on `blackoutDates`.
+export type BlackoutRange = {
+  dateISO: string;   // YYYY-MM-DD in the business TZ
+  startHHMM: string; // local wall-clock start, e.g. "12:00"
+  endHHMM: string;   // local wall-clock end (exclusive), e.g. "13:00"
+};
+
 export type BusinessHours = {
   timeZone: string; // IANA, e.g. "America/Toronto"
   slotIntervalMinutes: number; // how often a slot starts (e.g. 30)
   minBookingNoticeMinutes: number; // earliest start = now + this
   bookingWindowDays: number; // how far ahead customers can book
   weekly: DaySchedule[]; // length 7, indexed by `day`
-  blackoutDates: string[]; // YYYY-MM-DD in the business TZ
+  blackoutDates: string[]; // YYYY-MM-DD in the business TZ (full-day off)
+  blackoutRanges: BlackoutRange[]; // partial-day off
 };
 
 // Defaults used when the siteContent row is missing or partially
@@ -40,6 +52,7 @@ export const DEFAULT_BUSINESS_HOURS: BusinessHours = {
     { day: 6, open: "09:00", close: "15:00" }, // Sat short day
   ],
   blackoutDates: [],
+  blackoutRanges: [],
 };
 
 // Merge a partial / unknown value (from siteContent) onto the defaults so
@@ -68,6 +81,9 @@ export function resolveBusinessHours(input: unknown): BusinessHours {
       ? (i.weekly as DaySchedule[])
       : DEFAULT_BUSINESS_HOURS.weekly,
     blackoutDates: Array.isArray(i.blackoutDates) ? i.blackoutDates : [],
+    blackoutRanges: Array.isArray(i.blackoutRanges)
+      ? (i.blackoutRanges as BlackoutRange[])
+      : [],
   };
 }
 
