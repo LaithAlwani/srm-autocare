@@ -8,6 +8,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
+import { ConfirmModal } from "@/components/admin/confirm-modal";
 import { compressImage } from "@/lib/image";
 
 export default function AdminGalleryPage() {
@@ -27,6 +28,13 @@ export default function AdminGalleryPage() {
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  // Holds the row the admin is about to delete. Set when the trash icon
+  // is clicked; cleared by the confirm modal on close.
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: Id<"gallery">;
+    imageUrl: string | null;
+    caption?: string;
+  } | null>(null);
 
   async function handleUpload(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -75,10 +83,6 @@ export default function AdminGalleryPage() {
     }
   }
 
-  async function handleDelete(id: Id<"gallery">) {
-    if (!confirm("Delete this image?")) return;
-    await removeItem({ id });
-  }
 
   const uploading = progress !== null;
   const uploadLabel = uploading
@@ -188,8 +192,14 @@ export default function AdminGalleryPage() {
                 />
               </div>
               <button
-                onClick={() => handleDelete(item._id)}
-                className="absolute top-2 right-2 w-8 h-8 bg-surface/80 backdrop-blur flex items-center justify-center text-foreground-muted hover:text-error opacity-0 group-hover:opacity-100 transition-opacity"
+                onClick={() =>
+                  setDeleteTarget({
+                    id: item._id,
+                    imageUrl: item.imageUrl,
+                    caption: item.caption,
+                  })
+                }
+                className="absolute top-2 right-2 w-8 h-8 bg-surface/80 backdrop-blur flex items-center justify-center text-foreground-muted hover:text-error md:opacity-0 md:group-hover:opacity-100 transition-opacity"
                 aria-label="Delete"
               >
                 <Trash2 size={14} />
@@ -197,6 +207,45 @@ export default function AdminGalleryPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmModal
+          title="Delete image?"
+          variant="danger"
+          confirmLabel="Delete image"
+          cancelLabel="Keep image"
+          message={
+            <div className="space-y-3">
+              <p>
+                This image will be removed from the public gallery and the
+                underlying file deleted from storage. This can't be undone.
+              </p>
+              {deleteTarget.imageUrl && (
+                <div className="relative aspect-video bg-surface-container-lowest border border-border overflow-hidden">
+                  {/* Plain <img> here instead of next/image — the preview
+                      is tiny, only shown inside the modal, and we don't
+                      need optimization for a one-off thumbnail. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={deleteTarget.imageUrl}
+                    alt={deleteTarget.caption ?? "Image about to be deleted"}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+              {deleteTarget.caption && (
+                <p className="text-label-tech text-foreground-muted italic">
+                  “{deleteTarget.caption}”
+                </p>
+              )}
+            </div>
+          }
+          onConfirm={async () => {
+            await removeItem({ id: deleteTarget.id });
+          }}
+          onClose={() => setDeleteTarget(null)}
+        />
       )}
     </div>
   );
