@@ -43,19 +43,24 @@ const MOUNT_DIV_ID = "square-card-container";
 
 // Style overrides for Square's iframe. The SDK injects an iframe into our
 // page; this object styles its INTERNAL elements (text color, placeholder,
-// background) to match the Midnight Precision palette. Square accepts only
-// a small allowlist of selectors and properties — anything else throws
-// "One or more style selectors and/or CSS properties are invalid" on init.
-// In particular: fontFamily only accepts a SINGLE name (no fallback stack),
-// and the invalid-state selector is `input.is-error`, not `input.invalid`.
+// background). Square accepts only a small allowlist of selectors —
+// fontFamily only accepts a SINGLE name (no fallback stack), and the
+// invalid-state selector is `input.is-error`, not `input.invalid`.
+//
+// Deliberately light-themed (white bg, dark text) even though the rest
+// of the site is dark. Browser autofill paints its own light background
+// inside the iframe via `-webkit-box-shadow`, which we can't override
+// from outside (the SDK doesn't expose `:-webkit-autofill`). Matching
+// the autofill palette means the transition from empty → autofilled is
+// visually seamless instead of "field disappears".
 const CARD_STYLE = {
   input: {
-    color: "#f5f5f7",
+    color: "#1a1a1a",
     fontSize: "16px",
-    backgroundColor: "transparent",
+    backgroundColor: "#ffffff",
   },
-  "input.is-error": { color: "#ff6b6b" },
-  "input::placeholder": { color: "#6b6b73" },
+  "input.is-error": { color: "#c92a2a" },
+  "input::placeholder": { color: "#9aa0a6" },
 };
 
 export function SquarePaymentForm({
@@ -189,9 +194,11 @@ export function SquarePaymentForm({
         />
       )}
 
-      {/* Square injects its iframe into this div. Min height keeps the
-          surrounding gloss-card from collapsing while the SDK loads. */}
-      <div id={MOUNT_DIV_ID} className="min-h-32" />
+      {/* Square injects its iframe into this div. White surface so the
+          light-themed input fields don't look like floating pills on the
+          dark card. Min height keeps the layout stable while the SDK
+          loads in. */}
+      <div id={MOUNT_DIV_ID} className="min-h-32 bg-white p-3" />
 
       {!cardReady && !error && (
         <p className="mt-4 text-label-tech text-foreground-muted flex items-center gap-2">

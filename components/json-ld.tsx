@@ -37,6 +37,20 @@ function openingHours() {
     }));
 }
 
+// Appointment-only days described in a separate spec — Schema.org doesn't
+// have a dedicated "by appointment" marker, but adding the spec with no
+// opens/closes plus a `description` is the recommended pattern (Google
+// surfaces this as a note in rich results).
+function appointmentOnlyHours() {
+  return siteConfig.defaultHours
+    .filter((d) => d.appointmentOnly)
+    .map((d) => ({
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: DAY_URI[d.day],
+      description: "By appointment only — no walk-ins",
+    }));
+}
+
 export function JsonLd() {
   const data = {
     "@context": "https://schema.org",
@@ -62,7 +76,7 @@ export function JsonLd() {
       latitude: GEO_LAT,
       longitude: GEO_LNG,
     },
-    openingHoursSpecification: openingHours(),
+    openingHoursSpecification: [...openingHours(), ...appointmentOnlyHours()],
     sameAs: [siteConfig.social.instagram, siteConfig.social.facebook].filter(Boolean),
     areaServed: {
       "@type": "City",

@@ -150,11 +150,13 @@ async function computeSlots(
   totalMinutes: number,
   excludeBookingId?: string,
 ): Promise<string[]> {
-  // 1. Day-level disqualifiers — blackout, closed weekday, past day.
+  // 1. Day-level disqualifiers — blackout, closed weekday, past day, or
+  //    today (same-day bookings are deliberately not allowed; the shop
+  //    needs at least 24h notice to prep).
   if (hours.blackoutDates.includes(dateISO)) return [];
 
   const todayKey = dayKey(hours.timeZone);
-  if (dateISO < todayKey) return [];
+  if (dateISO <= todayKey) return [];
 
   const weekday = weekdayInZone(
     hours.timeZone,

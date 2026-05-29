@@ -110,10 +110,23 @@ export default function ContactPage() {
                       {siteConfig.defaultHours.map((h) => (
                         <li key={h.day} className="flex justify-between gap-6 min-w-45">
                           <span className="text-foreground-muted">{h.day}</span>
-                          <span>{h.open ? `${h.open} – ${h.close}` : "Closed"}</span>
+                          <span
+                            className={
+                              h.appointmentOnly ? "text-primary" : undefined
+                            }
+                          >
+                            {h.appointmentOnly
+                              ? "By appointment"
+                              : h.open
+                                ? `${h.open} – ${h.close}`
+                                : "Closed"}
+                          </span>
                         </li>
                       ))}
                     </ul>
+                    <p className="text-label-tech text-foreground-muted mt-3 italic">
+                      {siteConfig.weekendNotice}
+                    </p>
                   </div>
                 </li>
               </ul>

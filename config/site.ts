@@ -28,15 +28,23 @@ export const siteConfig = {
 
   // Default hours — admin can override via Convex siteContent["hours"] when
   // they need to change seasonally without a redeploy.
+  //
+  // `appointmentOnly` flags days where the shop is technically open but
+  // only for pre-booked work — no walk-ins. Surfaced as "By appointment
+  // only" on the contact page and as a banner on /book.
   defaultHours: [
-    { day: "Mon", open: "09:00", close: "18:00" },
-    { day: "Tue", open: "09:00", close: "18:00" },
-    { day: "Wed", open: "09:00", close: "18:00" },
-    { day: "Thu", open: "09:00", close: "18:00" },
-    { day: "Fri", open: "09:00", close: "18:00" },
-    { day: "Sat", open: null, close: null },
-    { day: "Sun", open: null, close: null },
+    { day: "Mon", open: "09:00", close: "18:00", appointmentOnly: false },
+    { day: "Tue", open: "09:00", close: "18:00", appointmentOnly: false },
+    { day: "Wed", open: "09:00", close: "18:00", appointmentOnly: false },
+    { day: "Thu", open: "09:00", close: "18:00", appointmentOnly: false },
+    { day: "Fri", open: "09:00", close: "18:00", appointmentOnly: false },
+    { day: "Sat", open: null, close: null, appointmentOnly: true },
+    { day: "Sun", open: null, close: null, appointmentOnly: true },
   ],
+
+  // Short, reusable copy for the "weekends are by appointment" notice.
+  // Surfaced on the booking page hero, contact page, and home page.
+  weekendNotice: "Saturday & Sunday — by appointment only, no walk-ins.",
 
   social: {
     instagram: "https://instagram.com/srm_autocare",

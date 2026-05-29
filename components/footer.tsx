@@ -72,6 +72,9 @@ export function Footer() {
               </a>
             </li>
           </ul>
+          <p className="text-label-tech text-foreground-muted mt-6 italic">
+            {siteConfig.weekendNotice}
+          </p>
         </div>
 
         {/* Connect */}

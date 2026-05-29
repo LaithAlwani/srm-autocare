@@ -303,6 +303,9 @@ export default function HomePage() {
               or call {siteConfig.contact.phone}
             </a>
           </div>
+          <p className="text-label-tech text-on-primary/80 mt-8">
+            {siteConfig.weekendNotice}
+          </p>
         </Container>
       </section>
     </div>

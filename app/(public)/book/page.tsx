@@ -17,6 +17,7 @@ import { Eyebrow } from "@/components/ui/eyebrow";
 import { Button } from "@/components/ui/button";
 import { HeroMedia } from "@/components/hero-media";
 import { heroMedia } from "@/config/media";
+import { siteConfig } from "@/config/site";
 import { SquarePaymentForm } from "@/components/square-payment-form";
 import { DateScroller } from "@/components/ui/date-scroller";
 import { formatPriceFromCents, formatDuration } from "@/lib/format";
@@ -35,10 +36,12 @@ const STEP_LABELS: Record<Step, string> = {
   4: "Payment",
 };
 
-// Today as `YYYY-MM-DD` in the browser's local zone. Used as the lower bound
-// on the date picker — we never let the customer pick a day in the past.
-function todayISO(): string {
+// Tomorrow as `YYYY-MM-DD` in the browser's local zone. Lower bound on
+// the date picker — same-day bookings aren't allowed, so showing today
+// in the date strip would just be a dead row with no slots underneath.
+function tomorrowISO(): string {
   const d = new Date();
+  d.setDate(d.getDate() + 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
@@ -51,7 +54,7 @@ export default function BookPage() {
   const [serviceId, setServiceId] = useState<Id<"services"> | null>(
     (searchParams.get("service") as Id<"services"> | null) ?? null,
   );
-  const minDate = todayISO();
+  const minDate = tomorrowISO();
   const [date, setDate] = useState<string>(minDate);
   // Tracks whether we've auto-selected the nearest open date for this service
   // already — once the user manually changes it we leave them alone.
@@ -192,6 +195,9 @@ export default function BookPage() {
           <p className="text-body-lg text-foreground-muted max-w-2xl">
             Select a service, pick a time, and place your deposit to confirm. The remaining balance
             is due at drop-off.
+          </p>
+          <p className="text-label-tech text-primary mt-4">
+            {siteConfig.weekendNotice}
           </p>
         </Container>
       </section>
